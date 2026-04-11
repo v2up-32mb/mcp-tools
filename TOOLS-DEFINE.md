@@ -195,8 +195,11 @@
 2. 要求 `query` 非空
 3. 若目标为文件，则单文件扫描
 4. 若目标为目录，则 `WalkDir`
-5. 使用 `bufio.Scanner` 按行匹配
+5. 读取文件后按字节切分换行，不使用默认 64KiB token 上限的 `bufio.Scanner`
 6. 命中超过 limit 时提前停止
+
+### 边界说明
+- 现在可以处理**超长单行**文件，不会因为 `bufio.Scanner: token too long` 直接失败
 
 ### 返回结构
 每个 match 包括：

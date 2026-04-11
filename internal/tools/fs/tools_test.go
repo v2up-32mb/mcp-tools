@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -204,5 +205,34 @@ func TestEditLinesNormalizesMultiLineReplacementWithoutTrailingNewline(t *testin
 	want := "a\nX\nY\nd\n"
 	if string(got) != want {
 		t.Fatalf("unexpected file contents\nwant: %q\ngot:  %q", want, string(got))
+	}
+}
+
+func TestSearchTextSupportsLongLines(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.search_text")
+	target := filepath.Join(cfg.StartupDirectory, "long-line.txt")
+	payload := bytes.Repeat([]byte("a"), 70*1024)
+	payload = append(payload, []byte("needle\nshort line\n")...)
+	if err := os.WriteFile(target, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":  "long-line.txt",
+		"query": "needle",
+	})
+	if err != nil {
+		t.Fatalf("search_text failed: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result: %#v", result)
+	}
+	if !strings.Contains(result.Content[0].Text, "needle") {
+		t.Fatalf("expected result text to contain needle, got %q", result.Content[0].Text)
+	}
+	matches, ok := result.StructuredContent["matches"].([]map[string]any)
+	if ok && len(matches) == 0 {
+		t.Fatal("expected at least one match")
 	}
 }

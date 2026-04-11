@@ -1,7 +1,6 @@
 package fs
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -358,11 +357,10 @@ func searchSingleFile(path string, query string, limit int, matches *[]map[strin
 	if err != nil {
 		return err
 	}
-	scanner := bufio.NewScanner(bytes.NewReader(payload))
 	lineNo := 0
-	for scanner.Scan() {
+	for _, lineBytes := range splitLinesBytes(payload) {
 		lineNo++
-		line := scanner.Text()
+		line := string(lineBytes)
 		if strings.Contains(line, query) {
 			*matches = append(*matches, map[string]any{
 				"path": path,
@@ -374,7 +372,18 @@ func searchSingleFile(path string, query string, limit int, matches *[]map[strin
 			}
 		}
 	}
-	return scanner.Err()
+	return nil
+}
+
+func splitLinesBytes(payload []byte) [][]byte {
+	if len(payload) == 0 {
+		return nil
+	}
+	parts := bytes.Split(payload, []byte{'\n'})
+	if len(parts) > 0 && len(parts[len(parts)-1]) == 0 {
+		parts = parts[:len(parts)-1]
+	}
+	return parts
 }
 
 func splitLinesPreserve(text string) []string {
