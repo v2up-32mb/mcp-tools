@@ -6,6 +6,8 @@
 
 - `AGENTS.md`：给 AI 代理/人工调用方的使用与边界说明
 - `TOOLS-DEFINE.md`：给维护者的内部工具实现算法与约束说明
+- `CHANGELOG.md`：版本变更记录
+- `docs/releases/v0.1.0.md`：`v0.1.0` 发布说明
 
 ## 已实现能力
 
