@@ -1,0 +1,243 @@
+package mcp
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/example/mcp-tools/internal/audit"
+)
+
+var ErrUnknownTool = errors.New("unknown tool")
+
+type Tool interface {
+	Name() string
+	Description() string
+	Schema() map[string]any
+	Call(context.Context, CallContext, map[string]any) (Result, error)
+	ReadOnly() bool
+}
+
+type CallContext struct {
+	RemoteAddr      string
+	RequestID       string
+	SessionID       string
+	ProtocolVersion string
+}
+
+type TextContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type AuditData struct {
+	TargetPath   string
+	Workdir      string
+	Allowed      bool
+	Stdout       string
+	Stderr       string
+	ExitCode     *int
+	ResultDigest string
+}
+
+type Result struct {
+	Content           []TextContent  `json:"content,omitempty"`
+	StructuredContent map[string]any `json:"structuredContent,omitempty"`
+	IsError           bool           `json:"isError"`
+	Audit             AuditData      `json:"-"`
+}
+
+type ToolError struct {
+	Err   error
+	Audit AuditData
+}
+
+func (e *ToolError) Error() string {
+	if e == nil || e.Err == nil {
+		return "tool error"
+	}
+	return e.Err.Error()
+}
+
+func (e *ToolError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+type Registry struct {
+	mu      sync.RWMutex
+	tools   map[string]Tool
+	auditor audit.Logger
+}
+
+func NewRegistry(a audit.Logger) *Registry {
+	return &Registry{tools: make(map[string]Tool), auditor: a}
+}
+
+func (r *Registry) Register(t Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tools[t.Name()] = t
+}
+
+func (r *Registry) List() []map[string]any {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	tools := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		t := r.tools[name]
+		tools = append(tools, map[string]any{
+			"name":        t.Name(),
+			"title":       humanizeTitle(t.Name()),
+			"description": t.Description(),
+			"inputSchema": ensureSchema(t.Schema()),
+			"annotations": map[string]any{
+				"readOnlyHint":    t.ReadOnly(),
+				"destructiveHint": !t.ReadOnly(),
+				"idempotentHint":  t.ReadOnly(),
+				"openWorldHint":   false,
+			},
+		})
+	}
+	return tools
+}
+
+func (r *Registry) Call(ctx context.Context, callCtx CallContext, name string, args map[string]any) (Result, error) {
+	r.mu.RLock()
+	t, ok := r.tools[name]
+	r.mu.RUnlock()
+	if !ok {
+		return Result{}, fmt.Errorf("%w: %s", ErrUnknownTool, name)
+	}
+
+	started := time.Now()
+	result, callErr := t.Call(ctx, callCtx, args)
+	event := audit.Event{
+		Timestamp:       started.UTC(),
+		RequestID:       callCtx.RequestID,
+		SessionID:       callCtx.SessionID,
+		ProtocolVersion: callCtx.ProtocolVersion,
+		RemoteAddr:      callCtx.RemoteAddr,
+		Tool:            name,
+		Arguments:       args,
+		DurationMS:      time.Since(started).Milliseconds(),
+	}
+
+	if callErr != nil {
+		toolErr := extractToolError(callErr)
+		event.Success = false
+		event.Allowed = toolErr.Audit.Allowed
+		event.TargetPath = toolErr.Audit.TargetPath
+		event.Workdir = toolErr.Audit.Workdir
+		event.Stdout = toolErr.Audit.Stdout
+		event.Stderr = toolErr.Audit.Stderr
+		event.ExitCode = toolErr.Audit.ExitCode
+		event.Error = toolErr.Error()
+		event.ResultDigest = toolErr.Audit.ResultDigest
+		_ = r.auditor.Write(event)
+		return ErrorResult(toolErr.Error(), toolErr.Audit), nil
+	}
+
+	event.Success = true
+	event.Allowed = result.Audit.Allowed
+	event.TargetPath = result.Audit.TargetPath
+	event.Workdir = result.Audit.Workdir
+	event.Stdout = result.Audit.Stdout
+	event.Stderr = result.Audit.Stderr
+	event.ExitCode = result.Audit.ExitCode
+	event.ResultDigest = result.Audit.ResultDigest
+	_ = r.auditor.Write(event)
+	return normalizeResult(result), nil
+}
+
+func TextResult(text string, structured map[string]any, auditData AuditData) Result {
+	return Result{
+		Content:           []TextContent{{Type: "text", Text: text}},
+		StructuredContent: structured,
+		Audit:             auditData,
+	}
+}
+
+func ErrorResult(message string, auditData AuditData) Result {
+	auditData.ResultDigest = firstNonEmpty(auditData.ResultDigest, "error")
+	return Result{
+		Content: []TextContent{{Type: "text", Text: message}},
+		StructuredContent: map[string]any{
+			"error": message,
+		},
+		IsError: true,
+		Audit:   auditData,
+	}
+}
+
+func WrapToolError(err error, auditData AuditData) error {
+	if err == nil {
+		return nil
+	}
+	return &ToolError{Err: err, Audit: auditData}
+}
+
+func normalizeResult(result Result) Result {
+	if result.Content == nil && len(result.StructuredContent) > 0 {
+		result.Content = []TextContent{{Type: "text", Text: "ok"}}
+	}
+	result.Audit.ResultDigest = firstNonEmpty(result.Audit.ResultDigest, summarizeStructured(result.StructuredContent), "ok")
+	return result
+}
+
+func extractToolError(err error) *ToolError {
+	var toolErr *ToolError
+	if errors.As(err, &toolErr) {
+		return toolErr
+	}
+	return &ToolError{Err: err, Audit: AuditData{Allowed: true, ResultDigest: "tool error"}}
+}
+
+func ensureSchema(schema map[string]any) map[string]any {
+	if schema == nil {
+		return map[string]any{"type": "object", "additionalProperties": false}
+	}
+	if _, ok := schema["type"]; !ok {
+		schema["type"] = "object"
+	}
+	if _, ok := schema["additionalProperties"]; !ok {
+		schema["additionalProperties"] = false
+	}
+	return schema
+}
+
+func humanizeTitle(name string) string {
+	replacer := strings.NewReplacer(".", " ", "_", " ", "-", " ")
+	return strings.Title(replacer.Replace(name))
+}
+
+func summarizeStructured(structured map[string]any) string {
+	if len(structured) == 0 {
+		return ""
+	}
+	if summary, ok := structured["summary"].(string); ok && summary != "" {
+		return summary
+	}
+	return "ok"
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}

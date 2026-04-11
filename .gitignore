@@ -1,0 +1,16 @@
+# Generated runtime artifacts
+mcp-audit.jsonl
+tmp-interop.txt
+
+# Go build/test artifacts
+*.test
+*.out
+coverage.out
+cover.out
+bin/
+dist/
+
+# Editor / OS junk
+.DS_Store
+.idea/
+.vscode/
