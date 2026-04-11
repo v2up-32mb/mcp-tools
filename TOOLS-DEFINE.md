@@ -387,6 +387,8 @@ git pull --ff-only
 - 以 `-` 开头的参数必须匹配 `AllowedArgs`
 - 非 flag 参数必须是 workdir 内的本地 target
 - 禁止绝对路径、URL、`..` 越界路径
+- 对 `-o=...`、`-coverprofile=...` 这类 inline 路径参数也会再次校验，不能借 `flag=value` 写到 workdir 外
+- `-vettool` 当前明确不支持
 
 ### 输出策略
 - stdout/stderr 会按 `OutputMaxBytes` 截断

@@ -381,7 +381,7 @@ func defaultExecPresets(baseTimeout time.Duration) map[string]ExecPreset {
 		"go_vet": {
 			Command:     "go",
 			FixedArgs:   []string{"vet"},
-			AllowedArgs: []string{"-tags", "-vettool"},
+			AllowedArgs: []string{"-tags"},
 			Timeout:     baseTimeout,
 			ReadOnly:    true,
 		},
@@ -485,6 +485,11 @@ func validateConfig(cfg Config) error {
 		}
 		if preset.Timeout <= 0 {
 			return fmt.Errorf("exec preset %q timeout must be positive", name)
+		}
+		for _, arg := range preset.AllowedArgs {
+			if strings.TrimSpace(arg) == "-vettool" {
+				return fmt.Errorf("exec preset %q cannot allow -vettool", name)
+			}
 		}
 	}
 	return nil

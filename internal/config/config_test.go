@@ -126,6 +126,19 @@ func TestLoadRejectsUnsupportedGitCommand(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsBlockedExecArg(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "bad-exec.yaml")
+	content := "bearer_token: t\nexec:\n  presets:\n    go_vet:\n      allowed_args: [\"-tags\", \"-vettool\"]\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err == nil {
+		t.Fatal("expected blocked exec arg to fail")
+	}
+}
+
 func TestLoadEnvOverridesServerLimits(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("MCP_BEARER_TOKEN", "env-token")

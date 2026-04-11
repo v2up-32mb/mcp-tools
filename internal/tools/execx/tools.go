@@ -14,6 +14,24 @@ import (
 	"github.com/example/mcp-tools/internal/security"
 )
 
+var blockedFlags = map[string]bool{
+	"-vettool": true,
+}
+
+var inlineValueAllowedFlags = map[string]bool{
+	"-run":          true,
+	"-count":        true,
+	"-timeout":      true,
+	"-tags":         true,
+	"-o":            true,
+	"-coverprofile": true,
+}
+
+var inlinePathFlags = map[string]bool{
+	"-o":            true,
+	"-coverprofile": true,
+}
+
 type configuredTool struct {
 	cfg config.Config
 }
@@ -130,10 +148,30 @@ func validateArgs(presetName string, preset config.ExecPreset, raw any) ([]strin
 			return nil, fmt.Errorf("args must be non-empty strings")
 		}
 		if strings.HasPrefix(arg, "-") {
-			if !isAllowedFlag(arg, preset.AllowedArgs) {
+			name, inlineValue, hasInlineValue := splitFlagValue(arg)
+			if blockedFlags[name] {
+				return nil, fmt.Errorf("arg %q not allowed for preset %s", name, presetName)
+			}
+			if !isAllowedFlagName(name, preset.AllowedArgs) {
 				return nil, fmt.Errorf("arg %q not allowed for preset %s", arg, presetName)
 			}
-			out = append(out, arg)
+			if hasInlineValue {
+				if !inlineValueAllowedFlags[name] {
+					return nil, fmt.Errorf("arg %q does not allow inline values", name)
+				}
+				if strings.TrimSpace(inlineValue) == "" {
+					return nil, fmt.Errorf("arg %q requires a non-empty value", name)
+				}
+				if inlinePathFlags[name] {
+					if !isLocalTarget(inlineValue) {
+						return nil, fmt.Errorf("arg %q must stay within the working directory", arg)
+					}
+					inlineValue = filepath.ToSlash(filepath.Clean(inlineValue))
+				}
+				out = append(out, name+"="+inlineValue)
+				continue
+			}
+			out = append(out, name)
 			continue
 		}
 		if !isLocalTarget(arg) {
@@ -153,13 +191,21 @@ func defaultTargetsForPreset(preset string) []string {
 	}
 }
 
-func isAllowedFlag(arg string, prefixes []string) bool {
+func isAllowedFlagName(arg string, prefixes []string) bool {
 	for _, prefix := range prefixes {
-		if arg == prefix || strings.HasPrefix(arg, prefix+"=") {
+		if arg == prefix {
 			return true
 		}
 	}
 	return false
+}
+
+func splitFlagValue(arg string) (string, string, bool) {
+	name, value, ok := strings.Cut(arg, "=")
+	if !ok {
+		return arg, "", false
+	}
+	return name, value, true
 }
 
 func isLocalTarget(arg string) bool {

@@ -11,19 +11,18 @@ import (
 var ErrPathOutsideAllowedRoots = errors.New("path outside allowed roots")
 
 func ResolvePath(path string, allowedRoots []string) (string, error) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", fmt.Errorf("abs path: %w", err)
-	}
-	clean := filepath.Clean(abs)
-	resolved, err := evalWithMissingLeaf(clean)
+	resolved, err := canonicalizePathAllowMissing(path)
 	if err != nil {
 		return "", err
 	}
 	for _, root := range allowedRoots {
-		canonicalRoot, err := evalWithMissingLeaf(root)
+		canonicalRoot, err := canonicalizePathAllowMissing(root)
 		if err != nil {
-			canonicalRoot = filepath.Clean(root)
+			if absRoot, absErr := filepath.Abs(root); absErr == nil {
+				canonicalRoot = filepath.Clean(absRoot)
+			} else {
+				canonicalRoot = filepath.Clean(root)
+			}
 		}
 		rel, err := filepath.Rel(canonicalRoot, resolved)
 		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
@@ -31,6 +30,14 @@ func ResolvePath(path string, allowedRoots []string) (string, error) {
 		}
 	}
 	return "", ErrPathOutsideAllowedRoots
+}
+
+func canonicalizePathAllowMissing(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("abs path: %w", err)
+	}
+	return evalWithMissingPath(filepath.Clean(abs))
 }
 
 func RequireAllowedWorkdir(path string, allowedRoots []string) (string, error) {
@@ -48,21 +55,29 @@ func RequireAllowedWorkdir(path string, allowedRoots []string) (string, error) {
 	return resolved, nil
 }
 
-func evalWithMissingLeaf(path string) (string, error) {
-	resolved, err := filepath.EvalSymlinks(path)
-	if err == nil {
-		return resolved, nil
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("eval symlinks: %w", err)
-	}
-	parent := filepath.Dir(path)
-	resolvedParent, parentErr := filepath.EvalSymlinks(parent)
-	if parentErr != nil {
-		if errors.Is(parentErr, os.ErrNotExist) {
-			return filepath.Clean(path), nil
+func evalWithMissingPath(path string) (string, error) {
+	current := filepath.Clean(path)
+	missing := make([]string, 0, 4)
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Clean(resolved), nil
 		}
-		return "", fmt.Errorf("eval parent symlinks: %w", parentErr)
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("eval symlinks: %w", err)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			resolved := current
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
 	}
-	return filepath.Join(resolvedParent, filepath.Base(path)), nil
 }

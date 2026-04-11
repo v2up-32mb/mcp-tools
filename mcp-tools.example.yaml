@@ -60,6 +60,6 @@ exec:
       enabled: true
       command: go
       fixed_args: ["vet"]
-      allowed_args: ["-tags", "-vettool"]
+      allowed_args: ["-tags"]
       timeout_sec: 30
       read_only: true
