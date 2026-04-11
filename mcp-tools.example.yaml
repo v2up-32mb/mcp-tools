@@ -1,27 +1,90 @@
-listen_addr: 0.0.0.0:8080
+# mcp-tools.example.yaml
+#
+# 这是“带注释的完整示例配置”。
+# 如果你只是先在本机跑起来，请优先看：
+#   - mcp-tools.minimal.yaml
+#
+# 配置优先级：
+#   defaults < YAML < environment variables
+#
+# 最常用、最需要先理解的只有 3 个：
+#   1. bearer_token
+#   2. listen_addr
+#   3. allowed_roots
+
+# 服务监听地址。
+# - 127.0.0.1:8080  -> 仅本机可访问，最安全，推荐本地测试默认用这个
+# - 0.0.0.0:8080    -> 所有网卡都监听，适合远程 agent 接入，但风险更高
+listen_addr: 127.0.0.1:8080
+
+# Bearer Token。
+# 所有客户端都必须带：
+#   Authorization: Bearer <token>
 bearer_token: change-me
+
+# 额外允许的工作区目录。
+# 注意：
+# - 服务启动目录会自动加入 allowed roots
+# - 这里配置的是“额外白名单目录”
 allowed_roots:
   - ./workspace
-allowed_origins:
-  - https://your-ui.example
+
+# 只用于“浏览器来源 / CORS”控制，不是 hostname 入站控制。
+# 只有浏览器/Web UI 这类会带 Origin 头的请求，才会受它影响。
+#
+# 规则：
+# - 不配置 / 留空：
+#     * 非浏览器客户端（通常没 Origin 头）可以正常连
+#     * 浏览器客户端会被拒绝
+# - 正确配置后：
+#     * 只有这些 Origin 才允许访问
+#
+# 例子：
+# allowed_origins:
+#   - http://localhost:3000
+#   - https://your-ui.example
+#
+# 如果你不是从浏览器页面连服务，通常可以先不配。
+# allowed_origins: []
+
+# 审计日志路径。
+# 默认会记录工具调用、参数摘要、结果摘要、stdout/stderr 等。
 audit_log_path: ./logs/mcp-audit.jsonl
+
+# 单次命令默认超时（秒）
 command_timeout_sec: 30
+
+# stdout/stderr 或大文本返回的截断上限（字节）
 output_max_bytes: 65536
+
+# 单个 SSE stream 的内部消息队列长度。
+# 正常先保持默认值即可。
 stream_queue_size: 128
+
+# 单次 HTTP 请求体上限（字节）
 max_request_bytes: 1048576
+
+# HTTP server 超时配置（秒）
 read_header_timeout_sec: 5
 read_timeout_sec: 15
 write_timeout_sec: 30
 idle_timeout_sec: 60
+
+# MCP session 默认 TTL（分钟）
 session_ttl_min: 120
+
+# 服务元信息
 server_name: mcp-tools
 server_version: 0.1.0
+
+# 协议版本白名单。通常不需要改。
 supported_protocols:
   - 2025-11-25
   - 2025-03-26
   - 2024-11-05
 
 git:
+  # Git 只开放固定白名单子命令，不支持任意透传，也不支持 push。
   allowed_subcommands:
     - status
     - diff
@@ -35,6 +98,7 @@ git:
 
 exec:
   presets:
+    # gofmt -w
     go_fmt:
       enabled: true
       command: gofmt
@@ -42,6 +106,8 @@ exec:
       allowed_args: ["-s", "-l"]
       timeout_sec: 30
       read_only: false
+
+    # go test
     go_test:
       enabled: true
       command: go
@@ -49,6 +115,8 @@ exec:
       allowed_args: ["-run", "-count", "-timeout", "-v", "-race", "-cover", "-coverprofile"]
       timeout_sec: 30
       read_only: true
+
+    # go build
     go_build:
       enabled: true
       command: go
@@ -56,6 +124,9 @@ exec:
       allowed_args: ["-v", "-race", "-o", "-tags"]
       timeout_sec: 30
       read_only: false
+
+    # go vet
+    # 注意：当前明确不支持 -vettool
     go_vet:
       enabled: true
       command: go

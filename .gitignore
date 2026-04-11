@@ -1,3 +1,6 @@
+# Local operator config (may contain secrets)
+mcp-tools.yaml
+
 # Generated runtime artifacts
 mcp-audit.jsonl
 tmp-interop.txt

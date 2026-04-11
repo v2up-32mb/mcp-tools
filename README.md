@@ -90,7 +90,95 @@ defaults < YAML < environment variables
 
 ## YAML 配置文件
 
-示例文件：`mcp-tools.example.yaml`
+示例文件：
+
+- `mcp-tools.minimal.yaml`：最小可用配置，适合先本地跑起来
+- `mcp-tools.example.yaml`：带详细注释的完整示例
+
+### 你通常先只需要关心 3 个字段
+
+#### `bearer_token`
+
+必配。所有客户端都要带：
+
+```text
+Authorization: Bearer <token>
+```
+
+#### `listen_addr`
+
+决定服务监听范围：
+
+- `127.0.0.1:8080`：只本机可连，推荐本地测试默认用这个
+- `0.0.0.0:8080`：所有网卡都监听，适合远程 agent 接入，但风险更高
+
+#### `allowed_roots`
+
+额外允许访问的目录白名单。
+
+注意：
+
+- 服务启动目录会**自动加入**
+- `allowed_roots` 是“附加目录”，不是完整覆盖列表
+
+### `allowed_origins` 到底是什么？
+
+这是最容易误解的配置项。
+
+它控制的是：
+
+- **浏览器请求里的 `Origin`**
+- 也就是 **CORS / 浏览器来源限制**
+
+它**不是**：
+
+- 主机名白名单
+- IP 白名单
+- 入站网络 ACL
+
+#### 如果配错会怎样？
+
+如果你的 MCP 客户端是浏览器页面 / Web UI，这类请求通常会带 `Origin` 头。  
+这时如果 `allowed_origins` 不匹配，服务端会直接拒绝：
+
+```text
+403 origin not allowed
+```
+
+#### 如果不配置、留空会怎样？
+
+准确行为是：
+
+- **没有 `Origin` 头的请求**：允许继续
+- **带 `Origin` 头的请求**：会被拒绝
+
+所以：
+
+- CLI / Node / Go / Python 后端客户端通常不受影响
+- 浏览器前端会受影响
+
+#### 什么时候需要配？
+
+只有你通过浏览器 UI / Web 前端接入时，才通常需要配。
+
+例如：
+
+```yaml
+allowed_origins:
+  - http://localhost:3000
+  - https://your-ui.example
+```
+
+#### 什么时候可以不配？
+
+如果你是：
+
+- 本地 CLI
+- 本地 AI agent
+- 服务端程序
+- Node/Go/Python MCP 客户端
+
+通常可以先不配 `allowed_origins`。
 
 常用字段：
 
@@ -118,6 +206,7 @@ defaults < YAML < environment variables
 
 - YAML 中的相对路径，按**配置文件所在目录**解析
 - `allowed_roots` 是**附加白名单目录**；启动目录始终保留
+- `allowed_origins` 是浏览器 `Origin` 白名单；**不是 hostname 入站控制**
 - `git.allowed_subcommands` 只能配置当前实现支持的白名单子命令，**不支持 `push`**
 - `exec.presets.<name>.enabled: false` 可禁用内置 preset
 
@@ -138,7 +227,7 @@ go run ./cmd/mcp-tools
 ### 方式 4：启动前校验配置
 
 ```bash
-go run ./cmd/mcp-tools -config ./mcp-tools.example.yaml -validate-config
+go run ./cmd/mcp-tools -config ./mcp-tools.minimal.yaml -validate-config
 ```
 
 这会打印**生效后的配置摘要**并退出，适合 CI/CD、容器启动前检查。
@@ -146,13 +235,13 @@ go run ./cmd/mcp-tools -config ./mcp-tools.example.yaml -validate-config
 ### 方式 2：YAML + `-config`
 
 ```bash
-go run ./cmd/mcp-tools -config ./mcp-tools.example.yaml
+go run ./cmd/mcp-tools -config ./mcp-tools.minimal.yaml
 ```
 
 ### 方式 3：YAML + 环境变量覆盖
 
 ```bash
-export MCP_CONFIG_FILE=./mcp-tools.example.yaml
+export MCP_CONFIG_FILE=./mcp-tools.minimal.yaml
 export MCP_BEARER_TOKEN='override-token'
 
 go run ./cmd/mcp-tools
