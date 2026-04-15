@@ -34,6 +34,7 @@ var knownGitSubcommands = map[string]bool{
 type Config struct {
 	ListenAddr         string
 	BearerToken        string
+	DebugHTTPLog       bool
 	AllowedRoots       []string
 	AllowedOrigins     []string
 	AuditLogPath       string
@@ -70,6 +71,7 @@ type LoadOptions struct {
 type fileConfig struct {
 	ListenAddr           string         `yaml:"listen_addr"`
 	BearerToken          string         `yaml:"bearer_token"`
+	DebugHTTPLog         *bool          `yaml:"debug_http_log"`
 	AllowedRoots         []string       `yaml:"allowed_roots"`
 	AllowedOrigins       []string       `yaml:"allowed_origins"`
 	AuditLogPath         string         `yaml:"audit_log_path"`
@@ -123,21 +125,23 @@ func LoadWithOptions(opts LoadOptions) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("abs workdir: %w", err)
 	}
+	cwd = filepath.Clean(cwd)
 
-	cfg := defaultConfig(filepath.Clean(cwd))
+	cfg := defaultConfig(cwd)
 	configPath := strings.TrimSpace(firstNonEmpty(opts.ConfigPath, os.Getenv("MCP_CONFIG_FILE")))
 	if configPath != "" {
-		resolvedConfigPath := configPath
-		if !filepath.IsAbs(resolvedConfigPath) {
-			resolvedConfigPath = filepath.Join(cwd, resolvedConfigPath)
-		}
-		resolvedConfigPath, err = filepath.Abs(resolvedConfigPath)
+		resolvedConfigPath, err := resolveConfigPathAgainst(cwd, configPath)
 		if err != nil {
-			return Config{}, fmt.Errorf("abs config path: %w", err)
+			return Config{}, err
 		}
-		resolvedConfigPath = filepath.Clean(resolvedConfigPath)
 		if err := applyYAMLFile(&cfg, resolvedConfigPath); err != nil {
 			return Config{}, err
+		}
+	} else if resolvedDefaultPath, ok := defaultConfigPath(); ok {
+		if _, err := os.Stat(resolvedDefaultPath); err == nil {
+			if err := applyYAMLFile(&cfg, resolvedDefaultPath); err != nil {
+				return Config{}, err
+			}
 		}
 	}
 	if err := applyEnv(&cfg, cwd); err != nil {
@@ -156,7 +160,7 @@ func defaultConfig(cwd string) Config {
 	timeout := 30 * time.Second
 	return Config{
 		ListenAddr:         "0.0.0.0:8080",
-		AllowedRoots:       []string{cwd},
+		AllowedRoots:       defaultAllowedRoots(cwd),
 		AuditLogPath:       filepath.Join(cwd, "mcp-audit.jsonl"),
 		CommandTimeout:     timeout,
 		OutputMaxBytes:     65536,
@@ -191,6 +195,9 @@ func applyYAMLFile(cfg *Config, path string) error {
 	}
 	if fc.BearerToken != "" {
 		cfg.BearerToken = fc.BearerToken
+	}
+	if fc.DebugHTTPLog != nil {
+		cfg.DebugHTTPLog = *fc.DebugHTTPLog
 	}
 	if len(fc.AllowedRoots) > 0 {
 		roots, err := resolvePathList(fc.AllowedRoots, baseDir)
@@ -264,12 +271,19 @@ func applyEnv(cfg *Config, cwd string) error {
 	if value := os.Getenv("MCP_LISTEN_ADDR"); value != "" {
 		cfg.ListenAddr = value
 	}
+	if value := os.Getenv("MCP_DEBUG_HTTP_LOG"); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid MCP_DEBUG_HTTP_LOG")
+		}
+		cfg.DebugHTTPLog = parsed
+	}
 	if value := os.Getenv("MCP_ALLOWED_ROOTS"); value != "" {
 		roots, err := resolvePathList(splitCSV(value), cwd)
 		if err != nil {
 			return err
 		}
-		cfg.AllowedRoots = mergeUniquePaths([]string{cfg.StartupDirectory}, roots)
+		cfg.AllowedRoots = mergeUniquePaths(defaultAllowedRoots(cfg.StartupDirectory), roots)
 	}
 	if value := os.Getenv("MCP_ALLOWED_ORIGINS"); value != "" {
 		cfg.AllowedOrigins = dedupeStrings(splitCSV(value))
@@ -493,6 +507,46 @@ func validateConfig(cfg Config) error {
 		}
 	}
 	return nil
+}
+
+func resolveConfigPathAgainst(cwd string, configPath string) (string, error) {
+	resolvedConfigPath := configPath
+	if !filepath.IsAbs(resolvedConfigPath) {
+		resolvedConfigPath = filepath.Join(cwd, resolvedConfigPath)
+	}
+	resolvedConfigPath, err := filepath.Abs(resolvedConfigPath)
+	if err != nil {
+		return "", fmt.Errorf("abs config path: %w", err)
+	}
+	return filepath.Clean(resolvedConfigPath), nil
+}
+
+func defaultAllowedRoots(cwd string) []string {
+	roots := []string{cwd}
+	if configDir, ok := defaultConfigDir(); ok {
+		roots = append(roots, configDir)
+	}
+	return mergeUniquePaths(nil, roots)
+}
+
+func defaultConfigPath() (string, bool) {
+	configDir, ok := defaultConfigDir()
+	if !ok {
+		return "", false
+	}
+	return filepath.Join(configDir, "config.yaml"), true
+}
+
+func defaultConfigDir() (string, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return "", false
+	}
+	absHome, err := filepath.Abs(home)
+	if err != nil {
+		return "", false
+	}
+	return filepath.Clean(filepath.Join(absHome, ".mcp-tools")), true
 }
 
 func resolvePathList(values []string, baseDir string) ([]string, error) {

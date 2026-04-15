@@ -16,6 +16,7 @@ func TestLoadWithYAMLAndEnvOverride(t *testing.T) {
 	}
 	content := `listen_addr: 127.0.0.1:9999
 bearer_token: from-yaml
+debug_http_log: true
 allowed_roots:
   - ./extra
 allowed_origins:
@@ -66,6 +67,9 @@ exec:
 	if cfg.BearerToken != "from-env" {
 		t.Fatalf("expected env token, got %q", cfg.BearerToken)
 	}
+	if !cfg.DebugHTTPLog {
+		t.Fatal("expected debug http log from yaml")
+	}
 	if cfg.AuditLogPath != auditPath {
 		t.Fatalf("unexpected audit path: %s", cfg.AuditLogPath)
 	}
@@ -94,8 +98,11 @@ exec:
 	if goTest.Timeout != 11*time.Second {
 		t.Fatalf("unexpected go_test timeout: %s", goTest.Timeout)
 	}
-	if len(cfg.AllowedRoots) != 2 {
-		t.Fatalf("expected startup root + yaml root, got %#v", cfg.AllowedRoots)
+	if !containsPath(cfg.AllowedRoots, root) {
+		t.Fatalf("expected startup root in allowed roots, got %#v", cfg.AllowedRoots)
+	}
+	if !containsPath(cfg.AllowedRoots, filepath.Join(root, "extra")) {
+		t.Fatalf("expected yaml root in allowed roots, got %#v", cfg.AllowedRoots)
 	}
 }
 
@@ -142,6 +149,7 @@ func TestLoadRejectsBlockedExecArg(t *testing.T) {
 func TestLoadEnvOverridesServerLimits(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("MCP_BEARER_TOKEN", "env-token")
+	t.Setenv("MCP_DEBUG_HTTP_LOG", "true")
 	t.Setenv("MCP_MAX_REQUEST_BYTES", "2048")
 	t.Setenv("MCP_STREAM_QUEUE_SIZE", "256")
 	t.Setenv("MCP_READ_HEADER_TIMEOUT_SEC", "7")
@@ -156,10 +164,86 @@ func TestLoadEnvOverridesServerLimits(t *testing.T) {
 	if cfg.MaxRequestBytes != 2048 {
 		t.Fatalf("unexpected MaxRequestBytes: %d", cfg.MaxRequestBytes)
 	}
+	if !cfg.DebugHTTPLog {
+		t.Fatal("expected debug http log env override")
+	}
 	if cfg.StreamQueueSize != 256 {
 		t.Fatalf("unexpected StreamQueueSize: %d", cfg.StreamQueueSize)
 	}
 	if cfg.ReadHeaderTimeout != 7*time.Second || cfg.ReadTimeout != 17*time.Second || cfg.WriteTimeout != 27*time.Second || cfg.IdleTimeout != 37*time.Second {
 		t.Fatalf("unexpected timeout overrides: %+v", cfg)
 	}
+}
+
+func TestLoadUsesDefaultHomeConfigPathWhenPresent(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	setTestHomeDir(t, home)
+	configDir := filepath.Join(home, ".mcp-tools")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "config.yaml")
+	content := `bearer_token: home-token
+listen_addr: 127.0.0.1:9090
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadWithOptions(LoadOptions{WorkDir: root})
+	if err != nil {
+		t.Fatalf("LoadWithOptions error: %v", err)
+	}
+	if cfg.BearerToken != "home-token" {
+		t.Fatalf("expected token from default home config, got %q", cfg.BearerToken)
+	}
+	if cfg.ListenAddr != "127.0.0.1:9090" {
+		t.Fatalf("unexpected listen addr: %s", cfg.ListenAddr)
+	}
+	if !containsPath(cfg.AllowedRoots, filepath.Join(home, ".mcp-tools")) {
+		t.Fatalf("expected allowed roots to include home config dir, got %#v", cfg.AllowedRoots)
+	}
+}
+
+func TestLoadEnvAllowedRootsStillPreservesHomeConfigDir(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	extra := filepath.Join(root, "extra")
+	if err := os.MkdirAll(extra, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setTestHomeDir(t, home)
+	t.Setenv("MCP_BEARER_TOKEN", "env-token")
+	t.Setenv("MCP_ALLOWED_ROOTS", extra)
+
+	cfg, err := LoadWithOptions(LoadOptions{WorkDir: root})
+	if err != nil {
+		t.Fatalf("LoadWithOptions error: %v", err)
+	}
+	if !containsPath(cfg.AllowedRoots, root) {
+		t.Fatalf("expected startup dir in allowed roots, got %#v", cfg.AllowedRoots)
+	}
+	if !containsPath(cfg.AllowedRoots, filepath.Join(home, ".mcp-tools")) {
+		t.Fatalf("expected home config dir in allowed roots, got %#v", cfg.AllowedRoots)
+	}
+	if !containsPath(cfg.AllowedRoots, extra) {
+		t.Fatalf("expected env extra root in allowed roots, got %#v", cfg.AllowedRoots)
+	}
+}
+
+func setTestHomeDir(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+}
+
+func containsPath(values []string, target string) bool {
+	cleanTarget := filepath.Clean(target)
+	for _, value := range values {
+		if filepath.Clean(value) == cleanTarget {
+			return true
+		}
+	}
+	return false
 }

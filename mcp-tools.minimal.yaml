@@ -1,11 +1,24 @@
 # mcp-tools.minimal.yaml
 #
 # 最小可用配置：适合“先在本机跑起来测试”
+#
+# 推荐使用方式：
+#   1. 复制到 ~/.mcp-tools/config.yaml
+#   2. 修改 bearer_token
+#   3. 按需追加 allowed_roots / allowed_origins
+#
+# 默认配置文件位置：
+#   - Linux / macOS: ~/.mcp-tools/config.yaml
+#   - Windows:       %USERPROFILE%\\.mcp-tools\\config.yaml
 
 listen_addr: 127.0.0.1:8080
 bearer_token: change-me
 
-# 额外允许目录。服务启动目录会自动加入白名单。
+# 调试客户端接入问题时可以临时打开。
+debug_http_log: false
+
+# 额外允许目录。
+# 服务启动目录和 ~/.mcp-tools 会自动加入白名单。
 allowed_roots:
   - ./workspace
 

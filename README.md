@@ -71,22 +71,24 @@
 
 ## 配置方式
 
-现在支持两种配置来源：
+现在支持三层配置来源：
 
-1. **YAML 配置文件**
-2. **环境变量覆盖**
+1. **默认值**
+2. **默认 home 配置文件**
+3. **显式 YAML / 环境变量覆盖**
 
 优先级：
 
 ```text
-defaults < YAML < environment variables
+defaults < 默认 home 配置文件 < YAML < environment variables
 ```
 
 这意味着：
 
+- 如果你没有传 `-config`，也没有设置 `MCP_CONFIG_FILE`，服务会自动尝试读取默认配置文件
 - 可以把大部分稳定配置放进 YAML
 - 用环境变量覆盖敏感项或部署时差异项，例如 token、监听地址
-- 默认总是把**服务启动目录**加入允许根目录
+- 默认总是把**服务启动目录**和 **~/.mcp-tools** 加入允许根目录
 
 ## YAML 配置文件
 
@@ -94,6 +96,17 @@ defaults < YAML < environment variables
 
 - `mcp-tools.minimal.yaml`：最小可用配置，适合先本地跑起来
 - `mcp-tools.example.yaml`：带详细注释的完整示例
+
+默认配置文件位置：
+
+- Linux / macOS：`~/.mcp-tools/config.yaml`
+- Windows：`%USERPROFILE%\.mcp-tools\config.yaml`
+
+说明：
+
+- 代码里使用 `os.UserHomeDir()` + `filepath.Join(...)` 计算路径
+- 所以会自动兼容 Windows 的路径分隔符
+- 如果默认路径下存在配置文件，在**未显式传 `-config`** 且**未设置 `MCP_CONFIG_FILE`** 时，会自动加载
 
 ### 你通常先只需要关心 3 个字段
 
@@ -112,6 +125,22 @@ Authorization: Bearer <token>
 - `127.0.0.1:8080`：只本机可连，推荐本地测试默认用这个
 - `0.0.0.0:8080`：所有网卡都监听，适合远程 agent 接入，但风险更高
 
+#### `debug_http_log`
+
+用于排查 MCP 客户端接入问题。
+
+开启后，服务端会打印**脱敏**的 HTTP/MCP 调试日志，例如：
+
+- 请求方法、路径、Accept、Origin
+- 是否带 `Authorization`
+- `Authorization` 的 scheme（例如 `Bearer`）
+- 是否带 session header
+- `MCP-Protocol-Version`
+- 解码后的 JSON-RPC method
+- 被拒绝的原因（例如缺 token、协议版本不支持）
+
+不会打印完整 Bearer Token。
+
 #### `allowed_roots`
 
 额外允许访问的目录白名单。
@@ -119,6 +148,7 @@ Authorization: Bearer <token>
 注意：
 
 - 服务启动目录会**自动加入**
+- `~/.mcp-tools` 也会**自动加入**
 - `allowed_roots` 是“附加目录”，不是完整覆盖列表
 
 ### `allowed_origins` 到底是什么？
@@ -185,6 +215,7 @@ allowed_origins:
 - `listen_addr`
 - `bearer_token`
 - `allowed_roots`
+- `debug_http_log`
 - `allowed_origins`
 - `audit_log_path`
 - `command_timeout_sec`
@@ -249,8 +280,9 @@ go run ./cmd/mcp-tools
 
 ## 环境变量
 
-- `MCP_CONFIG_FILE`：YAML 配置文件路径
+- `MCP_CONFIG_FILE`：显式指定 YAML 配置文件路径；若未设置则会尝试默认 home 配置文件
 - `MCP_BEARER_TOKEN`：Bearer Token；若 YAML 未配置则必填
+- `MCP_DEBUG_HTTP_LOG`：是否开启脱敏的 HTTP/MCP 调试日志，支持 `true/false`
 - `MCP_LISTEN_ADDR`：默认 `0.0.0.0:8080`
 - `MCP_ALLOWED_ROOTS`：逗号分隔的额外允许目录
 - `MCP_ALLOWED_ORIGINS`：逗号分隔的允许浏览器来源

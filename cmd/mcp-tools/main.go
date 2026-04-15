@@ -84,6 +84,7 @@ func run() error {
 func printConfigSummary(cfg config.Config) error {
 	summary := map[string]any{
 		"listen_addr":          cfg.ListenAddr,
+		"debug_http_log":       cfg.DebugHTTPLog,
 		"allowed_roots":        cfg.AllowedRoots,
 		"allowed_origins":      cfg.AllowedOrigins,
 		"audit_log_path":       cfg.AuditLogPath,

@@ -258,6 +258,7 @@ func (s *Server) handleSingleShotSSE(w http.ResponseWriter, r *http.Request, req
 		requested := nestedString(req.Params, "protocolVersion")
 		protocol, ok := chooseProtocol(requested, s.cfg.SupportedProtocols)
 		if !ok {
+			s.debugLogRejected(r, &req, http.StatusOK, -32002, "unsupported protocol version", map[string]any{"supported_protocols": s.cfg.SupportedProtocols, "transport": "single_shot_sse"})
 			_ = sw.writeRPCError(req.ID, -32002, "unsupported protocol version", map[string]any{"supported": s.cfg.SupportedProtocols})
 			return
 		}

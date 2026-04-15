@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/example/mcp-tools/internal/config"
 	"github.com/example/mcp-tools/internal/mcp"
@@ -96,7 +97,19 @@ func (s *Server) handleStatez(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
+	debugFields := s.debugRequestFields(r)
+	debugFields["handler"] = "mcp"
+	recorder := s.wrapDebugResponseWriter(w)
+	if s.debugEnabled() {
+		w = recorder
+		s.debugLog("http_request_received", debugFields)
+		defer s.debugLogCompleted(time.Now(), recorder, debugFields)
+	}
 	if origin := r.Header.Get("Origin"); origin != "" && !originAllowed(origin, s.cfg.AllowedOrigins) {
+		rejected := copyDebugFields(debugFields)
+		rejected["http_status"] = http.StatusForbidden
+		rejected["error"] = "origin not allowed"
+		s.debugLog("http_request_rejected", rejected)
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "origin not allowed"})
 		return
 	}
@@ -105,6 +118,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := authorizeRequest(r, s.cfg.BearerToken); err != nil {
+		s.debugLogRejected(r, nil, http.StatusUnauthorized, -32001, err.Error(), nil)
 		writeRPCError(w, nil, http.StatusUnauthorized, -32001, err.Error(), nil)
 		return
 	}
@@ -158,7 +172,7 @@ func (s *Server) handleMCPJSON(w http.ResponseWriter, r *http.Request, req rpcRe
 	}
 	switch req.Method {
 	case "initialize":
-		s.handleInitialize(w, req)
+		s.handleInitialize(w, r, req)
 	case "tools/list":
 		s.handleToolsList(w, r, req)
 	case "resources/list":
@@ -186,10 +200,11 @@ func (s *Server) handleMCPJSON(w http.ResponseWriter, r *http.Request, req rpcRe
 	}
 }
 
-func (s *Server) handleInitialize(w http.ResponseWriter, req rpcRequest) {
+func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, req rpcRequest) {
 	requested := nestedString(req.Params, "protocolVersion")
 	protocol, ok := chooseProtocol(requested, s.cfg.SupportedProtocols)
 	if !ok {
+		s.debugLogRejected(r, &req, http.StatusBadRequest, -32002, "unsupported protocol version", map[string]any{"supported_protocols": s.cfg.SupportedProtocols})
 		writeRPCError(w, req.ID, http.StatusBadRequest, -32002, "unsupported protocol version", map[string]any{"supported": s.cfg.SupportedProtocols})
 		return
 	}
@@ -930,6 +945,7 @@ func (s *Server) validateProtocolRequest(w http.ResponseWriter, r *http.Request,
 	if req.Method == "initialize" {
 		if headerVersion != "" {
 			if _, ok := chooseProtocol(headerVersion, s.cfg.SupportedProtocols); !ok {
+				s.debugLogRejected(r, &req, http.StatusBadRequest, -32002, "unsupported protocol version", map[string]any{"supported_protocols": s.cfg.SupportedProtocols})
 				writeRPCError(w, req.ID, http.StatusBadRequest, -32002, "unsupported protocol version", map[string]any{"supported": s.cfg.SupportedProtocols})
 				return errors.New("unsupported protocol version")
 			}
@@ -945,6 +961,7 @@ func (s *Server) validateProtocolRequest(w http.ResponseWriter, r *http.Request,
 		return nil
 	}
 	if err := validateRequestedProtocolAgainstSession(r, sess); err != nil {
+		s.debugLogRejected(r, &req, http.StatusBadRequest, -32002, "protocol version does not match session", map[string]any{"expected_protocol": sess.ProtocolVersion})
 		writeRPCError(w, req.ID, http.StatusBadRequest, -32002, "protocol version does not match session", map[string]any{"expected": sess.ProtocolVersion})
 		return errors.New("protocol version mismatch")
 	}

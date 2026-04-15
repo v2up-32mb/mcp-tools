@@ -4,8 +4,15 @@
 # 如果你只是先在本机跑起来，请优先看：
 #   - mcp-tools.minimal.yaml
 #
+# 默认配置文件位置：
+#   - Linux / macOS: ~/.mcp-tools/config.yaml
+#   - Windows:       %USERPROFILE%\\.mcp-tools\\config.yaml
+#
+# 代码内部会用 os.UserHomeDir() + filepath.Join(...) 计算这个路径，
+# 因此会自动兼容 Windows 的路径分隔符。
+#
 # 配置优先级：
-#   defaults < YAML < environment variables
+#   defaults < 默认 home 配置文件 < YAML < environment variables
 #
 # 最常用、最需要先理解的只有 3 个：
 #   1. bearer_token
@@ -22,9 +29,21 @@ listen_addr: 127.0.0.1:8080
 #   Authorization: Bearer <token>
 bearer_token: change-me
 
+# 是否开启 HTTP / MCP 调试日志。
+#
+# 开启后会打印：
+# - 请求方法、路径、Accept、Origin
+# - 是否携带 Authorization / 使用的认证 scheme
+# - 解码后的 JSON-RPC method
+# - 协议版本不匹配、缺少 token 等拒绝原因
+#
+# 不会打印完整 Bearer Token。
+debug_http_log: false
+
 # 额外允许的工作区目录。
 # 注意：
 # - 服务启动目录会自动加入 allowed roots
+# - ~/.mcp-tools 也会自动加入 allowed roots
 # - 这里配置的是“额外白名单目录”
 allowed_roots:
   - ./workspace
