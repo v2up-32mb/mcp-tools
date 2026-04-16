@@ -290,6 +290,9 @@ data: {jsonrpc response or notification}
 - `start_line` / `end_line` 为 **1-based** 行区间
 - `new_text` 按**逻辑行**解释
 - 服务端会按**严格行替换**执行，不再把后续内容黏连到替换片段后面
+- `new_text` 中的**中间空行会保留**，不会被自动忽略
+- `new_text == ""` 表示删除目标区间；`new_text == "
+"` 表示替换成 1 个空行
 - 调用方仍应**显式控制自己想要的换行结构**
 
 ### 推荐做法
@@ -306,6 +309,32 @@ data: {jsonrpc response or notification}
 - 要重写整个文件
 - 需要做复杂结构化重排
 - 已经明确掌握完整目标内容
+
+---
+
+## 7.1 `fs.search_text` 使用约定
+
+- 当前是**子串匹配**，不是正则
+- `path` 可以是文件或目录
+- 目录会递归搜索
+- 默认 `limit=200`，上限 `1000`
+- 现在已支持超长单行文件
+
+## 7.2 `git.*` 使用约定
+
+- 不传 `repo_path` 时，默认以服务启动目录作为仓库入口
+- `repo_path` 和真实仓库根都必须落在 `allowed_roots` 内
+- `git.add` / `git.restore` / `git.diff` 的 `paths` 必须是 repo-relative
+- `git.pull` 固定为 `--ff-only`
+
+## 7.3 `exec.run` 使用约定
+
+- 不是 shell，只能运行预定义 preset
+- `workdir` 必填，且必须落在 `allowed_roots` 内
+- `go_test` / `go_build` / `go_vet` 没有显式 target 时会自动补 `./...`
+- `timeout_override_sec` 只能缩短默认超时
+- `-vettool` 不支持
+- `-o=...` / `-coverprofile=...` 这类 inline 路径值也会再次校验，不能写到 workdir 外
 
 ---
 

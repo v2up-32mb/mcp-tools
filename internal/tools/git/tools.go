@@ -32,15 +32,15 @@ func (t tool) Call(ctx context.Context, callCtx mcp.CallContext, args map[string
 
 func NewTools(cfg config.Config) []mcp.Tool {
 	return []mcp.Tool{
-		tool{name: "git.status", desc: "Run git status --short --branch in an allowed repository.", schema: schemaRepo(), readOnly: true, call: fixed(cfg, "status", []string{"status", "--short", "--branch"})},
-		tool{name: "git.diff", desc: "Run git diff with optional explicit repo-relative paths.", schema: schemaPaths(false), readOnly: true, call: gitDiff(cfg)},
-		tool{name: "git.log", desc: "Run git log --oneline with a bounded limit.", schema: schemaLog(), readOnly: true, call: gitLog(cfg)},
-		tool{name: "git.add", desc: "Run git add on explicit repo-relative paths.", schema: schemaPaths(true), call: gitAdd(cfg)},
-		tool{name: "git.restore", desc: "Run git restore on explicit repo-relative paths.", schema: schemaPaths(true), call: gitRestore(cfg)},
-		tool{name: "git.commit", desc: "Run git commit -m <message> in an allowed repository.", schema: schemaCommit(), call: gitCommit(cfg)},
-		tool{name: "git.branch", desc: "List branches in an allowed repository.", schema: schemaRepo(), readOnly: true, call: fixed(cfg, "branch", []string{"branch"})},
-		tool{name: "git.switch", desc: "Run git switch <branch> in an allowed repository.", schema: schemaBranch(), call: gitSwitch(cfg)},
-		tool{name: "git.pull", desc: "Run git pull --ff-only in an allowed repository.", schema: schemaRepo(), call: fixed(cfg, "pull", []string{"pull", "--ff-only"})},
+		tool{name: "git.status", desc: "Run git status --short --branch. repo_path is optional; if omitted, the startup directory is used and must resolve to an allowed repository.", schema: schemaRepo(), readOnly: true, call: fixed(cfg, "status", []string{"status", "--short", "--branch"})},
+		tool{name: "git.diff", desc: "Run git diff. Optional paths must be explicit repo-relative paths; absolute paths, .. traversal, and option-like paths are rejected.", schema: schemaPaths(false), readOnly: true, call: gitDiff(cfg)},
+		tool{name: "git.log", desc: "Run git log --oneline with a bounded limit. limit defaults to 20 and is capped at 200.", schema: schemaLog(), readOnly: true, call: gitLog(cfg)},
+		tool{name: "git.add", desc: "Run git add on explicit repo-relative paths only. paths is required.", schema: schemaPaths(true), call: gitAdd(cfg)},
+		tool{name: "git.restore", desc: "Run git restore on explicit repo-relative paths only. paths is required.", schema: schemaPaths(true), call: gitRestore(cfg)},
+		tool{name: "git.commit", desc: "Run git commit -m <message> in an allowed repository. message must be non-empty.", schema: schemaCommit(), call: gitCommit(cfg)},
+		tool{name: "git.branch", desc: "List branches in an allowed repository. repo_path is optional and defaults to the startup directory.", schema: schemaRepo(), readOnly: true, call: fixed(cfg, "branch", []string{"branch"})},
+		tool{name: "git.switch", desc: "Run git switch <branch>. branch cannot be empty, start with -, or contain whitespace.", schema: schemaBranch(), call: gitSwitch(cfg)},
+		tool{name: "git.pull", desc: "Run git pull --ff-only in an allowed repository. No other pull mode is exposed.", schema: schemaRepo(), call: fixed(cfg, "pull", []string{"pull", "--ff-only"})},
 	}
 }
 

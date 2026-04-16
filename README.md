@@ -601,6 +601,10 @@ curl -s http://127.0.0.1:8080/mcp \
 
 - `start_line` / `end_line` 是 1-based 行区间
 - `new_text` 会按“逻辑行”解释，不会与后续内容黏连
+- `new_text` 中的**中间空行会保留**，不会被自动忽略
+- `new_text == ""` 表示“不插入任何行”，也就是删除替换区间
+- `new_text == "
+"` 表示插入 **1 个空行**
 - 调用方仍应**显式控制自己想要的换行结构**，例如想替换成两行就传两行文本
 
 ```bash
@@ -624,7 +628,36 @@ curl -s http://127.0.0.1:8080/mcp \
   }'
 ```
 
+### 11.1 fs.search_text
+
+`fs.search_text` 的使用细节：
+
+- 当前是**按子串匹配**，不是正则
+- `path` 可以是单个文件，也可以是目录
+- 目录模式下会递归搜索
+- 默认 `limit=200`，最大支持到 `1000`
+- 现在已支持**超长单行**文件，不会因为默认 `bufio.Scanner` 的 64KiB 限制直接失败
+
+### 11.2 git.* 通用约束
+
+`git.*` 工具有几条共同规则：
+
+- 如果不传 `repo_path`，默认使用服务启动目录
+- `repo_path` 必须落在 `allowed_roots` 内，并且真实仓库根也必须仍在 `allowed_roots` 内
+- `git.add` / `git.restore` / `git.diff` 的 `paths` 必须是 **repo-relative** 路径
+- 不允许绝对路径，不允许 `..` 越界，不允许把路径伪装成选项
+- `git.pull` 固定是 `git pull --ff-only`
+
 ### 12. exec.run
+
+`exec.run` 的使用细节：
+
+- 只能运行预定义 preset，不支持任意 shell 命令
+- `workdir` 必填，且必须落在 `allowed_roots` 内
+- `go_test` / `go_build` / `go_vet` 在没有显式 target 时，会自动补 `./...`
+- `timeout_override_sec` 只能**缩短**默认超时，不能放大
+- `-o=...` / `-coverprofile=...` 这类 inline 路径参数也会再次校验，不能写到工作目录外
+- `-vettool` 当前明确不支持
 
 ```bash
 curl -s http://127.0.0.1:8080/mcp \

@@ -34,15 +34,15 @@ func (t tool) Call(ctx context.Context, callCtx mcp.CallContext, args map[string
 
 func NewTools(cfg config.Config) []mcp.Tool {
 	return []mcp.Tool{
-		tool{name: "fs.read_file", desc: "Read a UTF-8 text file within allowed roots.", schema: schemaPath(), readOnly: true, call: readFile(cfg)},
-		tool{name: "fs.write_file", desc: "Write a UTF-8 text file atomically within allowed roots.", schema: schemaPathWithText(), call: writeFile(cfg)},
-		tool{name: "fs.list_dir", desc: "List entries in a directory within allowed roots.", schema: schemaPath(), readOnly: true, call: listDir(cfg)},
-		tool{name: "fs.stat_path", desc: "Return stat information for a path within allowed roots.", schema: schemaPath(), readOnly: true, call: statPath(cfg)},
-		tool{name: "fs.make_dir", desc: "Create a directory recursively within allowed roots.", schema: schemaPath(), call: makeDir(cfg)},
-		tool{name: "fs.move_path", desc: "Move or rename a path within allowed roots.", schema: schemaMove(), call: movePath(cfg)},
-		tool{name: "fs.delete_path", desc: "Delete a file or an empty directory within allowed roots.", schema: schemaPath(), call: deletePath(cfg)},
-		tool{name: "fs.search_text", desc: "Search text recursively under a file or directory within allowed roots.", schema: schemaSearch(), readOnly: true, call: searchText(cfg)},
-		tool{name: "fs.edit_lines", desc: "Strictly replace a 1-based line range. new_text is interpreted as logical lines, so callers should control intended line breaks explicitly.", schema: schemaEditLines(), call: editLines(cfg)},
+		tool{name: "fs.read_file", desc: "Read a UTF-8 text file from path. path may be relative to the startup directory and must resolve inside allowed roots.", schema: schemaPath(), readOnly: true, call: readFile(cfg)},
+		tool{name: "fs.write_file", desc: "Atomically replace or create a UTF-8 text file. path may be relative to the startup directory; parent directories are created if needed.", schema: schemaPathWithText(), call: writeFile(cfg)},
+		tool{name: "fs.list_dir", desc: "List direct children of a directory. Non-recursive; path must resolve inside allowed roots.", schema: schemaPath(), readOnly: true, call: listDir(cfg)},
+		tool{name: "fs.stat_path", desc: "Return size, mode, mod_time, and is_dir for a file or directory inside allowed roots.", schema: schemaPath(), readOnly: true, call: statPath(cfg)},
+		tool{name: "fs.make_dir", desc: "Create a directory recursively with mkdir -p semantics inside allowed roots.", schema: schemaPath(), call: makeDir(cfg)},
+		tool{name: "fs.move_path", desc: "Move or rename src to dst. Both src and dst must stay inside allowed roots; missing destination parents are created.", schema: schemaMove(), call: movePath(cfg)},
+		tool{name: "fs.delete_path", desc: "Delete a file or an empty directory. This is not recursive delete; non-empty directories will fail.", schema: schemaPath(), call: deletePath(cfg)},
+		tool{name: "fs.search_text", desc: "Search by plain substring in one file or recursively under a directory. Default limit is 200, max 1000, and long lines are supported.", schema: schemaSearch(), readOnly: true, call: searchText(cfg)},
+		tool{name: "fs.edit_lines", desc: "Strictly replace a 1-based line range. new_text is interpreted as logical lines; blank lines are preserved, empty string deletes the range, and \"\n\" inserts one blank line. expected_old_text can be used as an optimistic concurrency check.", schema: schemaEditLines(), call: editLines(cfg)},
 	}
 }
 

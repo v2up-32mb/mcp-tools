@@ -199,6 +199,8 @@
 6. 命中超过 limit 时提前停止
 
 ### 边界说明
+- 当前是**子串匹配**，不是正则匹配
+- `limit` 默认 200，最大 1000
 - 现在可以处理**超长单行**文件，不会因为 `bufio.Scanner: token too long` 直接失败
 
 ### 返回结构
@@ -251,6 +253,10 @@
 
 - **严格按行替换**
 - `new_text` 按逻辑行解释
+- `new_text` 中的**中间空行会保留**，不会被自动忽略
+- `new_text == ""` 表示删除目标区间
+- `new_text == "
+"` 表示替换成 1 个空行
 - 调用方仍需显式控制自己想替换成几行
 - 但即使忘记在 `new_text` 末尾补换行，也不会再把后续内容黏上去
 
@@ -284,13 +290,14 @@ Git 工具并不暴露任意 git 命令。
 - `pull`
 
 ### 共同安全策略
-1. 先解析 `repo_path`
+1. 先解析 `repo_path`；若未提供则默认使用 `StartupDirectory`
 2. `repo_path` 必须落在 allowed roots 中
 3. 再执行 `git rev-parse --show-toplevel`
 4. 真实仓库根也必须仍然落在 allowed roots 中
 5. 所有 git 命令都带：
    - `GIT_TERMINAL_PROMPT=0`
 6. 非白名单子命令直接拒绝
+7. `git.add` / `git.restore` / `git.diff` 的 `paths` 必须是 repo-relative，不能是绝对路径，也不能用 `..` 越界
 
 ---
 
@@ -389,6 +396,8 @@ git pull --ff-only
 ### 参数白名单策略
 - 以 `-` 开头的参数必须匹配 `AllowedArgs`
 - 非 flag 参数必须是 workdir 内的本地 target
+- `go_test` / `go_build` / `go_vet` 在没有显式 target 时会自动补 `./...`
+- `timeout_override_sec` 只允许缩短默认超时
 - 禁止绝对路径、URL、`..` 越界路径
 - 对 `-o=...`、`-coverprofile=...` 这类 inline 路径参数也会再次校验，不能借 `flag=value` 写到 workdir 外
 - `-vettool` 当前明确不支持
