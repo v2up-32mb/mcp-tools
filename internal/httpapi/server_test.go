@@ -47,7 +47,7 @@ func newTestServerWithConfig(t *testing.T, mutate func(*config.Config)) (http.Ha
 		SessionTTL:         time.Hour,
 		ServerName:         "mcp-tools-test",
 		ServerVersion:      "test",
-		SupportedProtocols: []string{config.ProtocolLatest, config.ProtocolLegacy},
+		SupportedProtocols: []string{config.ProtocolLatest, config.ProtocolCompat, config.ProtocolLegacy},
 	}
 	if mutate != nil {
 		mutate(&cfg)
@@ -309,6 +309,28 @@ func TestInitializeWithCombinedAcceptPrefersJSON(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "event: message") {
 		t.Fatalf("expected JSON body, got SSE body %q", rec.Body.String())
+	}
+}
+
+func TestInitializeSupportsCompatProtocol(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get(protocolHeader) != config.ProtocolCompat {
+		t.Fatalf("expected protocol header %q, got %q", config.ProtocolCompat, rec.Header().Get(protocolHeader))
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	result := decoded["result"].(map[string]any)
+	if got, _ := result["protocolVersion"].(string); got != config.ProtocolCompat {
+		t.Fatalf("expected negotiated protocol %q, got %q", config.ProtocolCompat, got)
 	}
 }
 

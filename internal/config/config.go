@@ -15,6 +15,7 @@ import (
 
 const (
 	ProtocolLatest = "2025-11-25"
+	ProtocolCompat = "2025-06-18"
 	ProtocolLegacy = "2025-03-26"
 	ProtocolOld    = "2024-11-05"
 )
@@ -176,7 +177,7 @@ func defaultConfig(cwd string) Config {
 		SessionTTL:         120 * time.Minute,
 		ServerName:         "mcp-tools",
 		ServerVersion:      "0.1.0",
-		SupportedProtocols: []string{ProtocolLatest, ProtocolLegacy, ProtocolOld},
+		SupportedProtocols: []string{ProtocolLatest, ProtocolCompat, ProtocolLegacy, ProtocolOld},
 	}
 }
 
