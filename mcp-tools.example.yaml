@@ -67,8 +67,13 @@ allowed_roots:
 # allowed_origins: []
 
 # 审计日志路径。
-# 默认会记录工具调用、参数摘要、结果摘要、stdout/stderr 等。
-audit_log_path: ./logs/mcp-audit.jsonl
+# 默认值：
+#   - Linux / macOS: ~/.mcp-tools/mcp-audit.jsonl
+#   - Windows:       %USERPROFILE%\\.mcp-tools\\mcp-audit.jsonl
+#
+# 一般建议直接用默认值，避免把日志落到仓库目录里。
+# 只有你想显式覆盖默认位置时才需要取消注释：
+# audit_log_path: /absolute/path/to/mcp-audit.jsonl
 
 # 单次命令默认超时（秒）
 command_timeout_sec: 30

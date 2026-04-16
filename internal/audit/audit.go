@@ -3,6 +3,7 @@ package audit
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -38,6 +39,9 @@ type JSONLWriter struct {
 }
 
 func NewJSONLWriter(path string) (*JSONLWriter, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, err

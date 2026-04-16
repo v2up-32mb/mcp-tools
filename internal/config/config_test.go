@@ -201,6 +201,9 @@ listen_addr: 127.0.0.1:9090
 	if cfg.ListenAddr != "127.0.0.1:9090" {
 		t.Fatalf("unexpected listen addr: %s", cfg.ListenAddr)
 	}
+	if cfg.AuditLogPath != filepath.Join(home, ".mcp-tools", "mcp-audit.jsonl") {
+		t.Fatalf("expected default audit log path under home config dir, got %q", cfg.AuditLogPath)
+	}
 	if !containsPath(cfg.AllowedRoots, filepath.Join(home, ".mcp-tools")) {
 		t.Fatalf("expected allowed roots to include home config dir, got %#v", cfg.AllowedRoots)
 	}
@@ -229,6 +232,22 @@ func TestLoadEnvAllowedRootsStillPreservesHomeConfigDir(t *testing.T) {
 	}
 	if !containsPath(cfg.AllowedRoots, extra) {
 		t.Fatalf("expected env extra root in allowed roots, got %#v", cfg.AllowedRoots)
+	}
+}
+
+func TestLoadDefaultAuditLogPathUsesHomeConfigDirWithoutConfigFile(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	setTestHomeDir(t, home)
+	t.Setenv("MCP_BEARER_TOKEN", "env-token")
+
+	cfg, err := LoadWithOptions(LoadOptions{WorkDir: root})
+	if err != nil {
+		t.Fatalf("LoadWithOptions error: %v", err)
+	}
+	want := filepath.Join(home, ".mcp-tools", "mcp-audit.jsonl")
+	if cfg.AuditLogPath != want {
+		t.Fatalf("expected audit log path %q, got %q", want, cfg.AuditLogPath)
 	}
 }
 

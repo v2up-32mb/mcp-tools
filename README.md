@@ -89,6 +89,7 @@ defaults < 默认 home 配置文件 < YAML < environment variables
 - 可以把大部分稳定配置放进 YAML
 - 用环境变量覆盖敏感项或部署时差异项，例如 token、监听地址
 - 默认总是把**服务启动目录**和 **~/.mcp-tools** 加入允许根目录
+- 默认审计日志会写到 **~/.mcp-tools/mcp-audit.jsonl**，避免污染当前仓库目录
 
 ## YAML 配置文件
 
@@ -237,6 +238,10 @@ allowed_origins:
 
 - YAML 中的相对路径，按**配置文件所在目录**解析
 - `allowed_roots` 是**附加白名单目录**；启动目录始终保留
+- 默认 `audit_log_path`：
+  - Linux / macOS：`~/.mcp-tools/mcp-audit.jsonl`
+  - Windows：`%USERPROFILE%\\.mcp-tools\\mcp-audit.jsonl`
+- `audit.NewJSONLWriter` 会自动创建缺失的父目录
 - `allowed_origins` 是浏览器 `Origin` 白名单；**不是 hostname 入站控制**
 - `git.allowed_subcommands` 只能配置当前实现支持的白名单子命令，**不支持 `push`**
 - `exec.presets.<name>.enabled: false` 可禁用内置 preset
@@ -286,7 +291,9 @@ go run ./cmd/mcp-tools
 - `MCP_LISTEN_ADDR`：默认 `0.0.0.0:8080`
 - `MCP_ALLOWED_ROOTS`：逗号分隔的额外允许目录
 - `MCP_ALLOWED_ORIGINS`：逗号分隔的允许浏览器来源
-- `MCP_AUDIT_LOG_PATH`：默认 `./mcp-audit.jsonl`
+- `MCP_AUDIT_LOG_PATH`：默认：
+  - Linux / macOS：`~/.mcp-tools/mcp-audit.jsonl`
+  - Windows：`%USERPROFILE%\\.mcp-tools\\mcp-audit.jsonl`
 - `MCP_COMMAND_TIMEOUT_SEC`：默认 `30`
 - `MCP_OUTPUT_MAX_BYTES`：默认 `65536`
 - `MCP_STREAM_QUEUE_SIZE`：单个 SSE stream 的内部队列容量，默认 `128`

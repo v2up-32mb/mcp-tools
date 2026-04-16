@@ -162,7 +162,7 @@ func defaultConfig(cwd string) Config {
 	return Config{
 		ListenAddr:         "0.0.0.0:8080",
 		AllowedRoots:       defaultAllowedRoots(cwd),
-		AuditLogPath:       filepath.Join(cwd, "mcp-audit.jsonl"),
+		AuditLogPath:       defaultAuditLogPath(cwd),
 		CommandTimeout:     timeout,
 		OutputMaxBytes:     65536,
 		StreamQueueSize:    128,
@@ -528,6 +528,13 @@ func defaultAllowedRoots(cwd string) []string {
 		roots = append(roots, configDir)
 	}
 	return mergeUniquePaths(nil, roots)
+}
+
+func defaultAuditLogPath(cwd string) string {
+	if configDir, ok := defaultConfigDir(); ok {
+		return filepath.Join(configDir, "mcp-audit.jsonl")
+	}
+	return filepath.Join(cwd, "mcp-audit.jsonl")
 }
 
 func defaultConfigPath() (string, bool) {
