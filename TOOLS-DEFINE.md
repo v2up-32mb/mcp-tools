@@ -392,11 +392,14 @@ git pull --ff-only
 - `go_test`
 - `go_build`
 - `go_vet`
+- `go_mod_tidy`
+- `go_mod_tidy`
 
 ### 参数白名单策略
 - 以 `-` 开头的参数必须匹配 `AllowedArgs`
 - 非 flag 参数必须是 workdir 内的本地 target
 - `go_test` / `go_build` / `go_vet` 在没有显式 target 时会自动补 `./...`
+- `go_mod_tidy` 不会自动补 target，而是直接在 `workdir` 中执行 `go mod tidy`
 - `timeout_override_sec` 只允许缩短默认超时
 - 禁止绝对路径、URL、`..` 越界路径
 - 对 `-o=...`、`-coverprofile=...` 这类 inline 路径参数也会再次校验，不能借 `flag=value` 写到 workdir 外

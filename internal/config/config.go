@@ -400,6 +400,12 @@ func defaultExecPresets(baseTimeout time.Duration) map[string]ExecPreset {
 			Timeout:     baseTimeout,
 			ReadOnly:    true,
 		},
+		"go_mod_tidy": {
+			Command:     "go",
+			FixedArgs:   []string{"mod", "tidy"},
+			AllowedArgs: []string{"-v", "-e", "-diff", "-go", "-compat", "-x"},
+			Timeout:     baseTimeout,
+		},
 	}
 }
 

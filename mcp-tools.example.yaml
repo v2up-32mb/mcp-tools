@@ -159,3 +159,12 @@ exec:
       allowed_args: ["-tags"]
       timeout_sec: 30
       read_only: true
+
+    # go mod tidy
+    go_mod_tidy:
+      enabled: true
+      command: go
+      fixed_args: ["mod", "tidy"]
+      allowed_args: ["-v", "-e", "-diff", "-go", "-compat", "-x"]
+      timeout_sec: 30
+      read_only: false

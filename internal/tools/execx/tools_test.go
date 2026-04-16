@@ -55,3 +55,23 @@ func TestValidateArgsAllowsInlineRelativePathFlags(t *testing.T) {
 		t.Fatalf("unexpected normalized path arg: %#v", got)
 	}
 }
+
+func TestValidateArgsAllowsGoModTidyInlineVersionFlags(t *testing.T) {
+	preset := config.ExecPreset{AllowedArgs: []string{"-go", "-compat", "-v"}, Timeout: time.Second}
+	got, err := validateArgs("go_mod_tidy", preset, []any{"-go=1.25", "-compat=1.24", "-v"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("unexpected args: %#v", got)
+	}
+	if got[0] != "-go=1.25" || got[1] != "-compat=1.24" {
+		t.Fatalf("unexpected normalized flags: %#v", got)
+	}
+}
+
+func TestDefaultTargetsForGoModTidyIsEmpty(t *testing.T) {
+	if got := defaultTargetsForPreset("go_mod_tidy"); len(got) != 0 {
+		t.Fatalf("expected no implicit targets, got %#v", got)
+	}
+}

@@ -44,7 +44,7 @@
   - `git.pull`
 - **Exec 工具**
   - `exec.run`
-  - 仅开放 Go preset：`go_fmt` / `go_test` / `go_build` / `go_vet`
+  - 仅开放 Go preset：`go_fmt` / `go_test` / `go_build` / `go_vet` / `go_mod_tidy`
 - 审计日志：JSON Lines
 - 目录边界：启动目录 + `allowed_roots`
 - 浏览器 Origin 拒绝：未配置 `allowed_origins` / `MCP_ALLOWED_ORIGINS` 时默认不接受浏览器来源请求
@@ -662,6 +662,7 @@ curl -s http://127.0.0.1:8080/mcp \
 - 只能运行预定义 preset，不支持任意 shell 命令
 - `workdir` 必填，且必须落在 `allowed_roots` 内
 - `go_test` / `go_build` / `go_vet` 在没有显式 target 时，会自动补 `./...`
+- `go_mod_tidy` 会直接在 `workdir` 中执行 `go mod tidy`，不会自动补目标路径
 - `timeout_override_sec` 只能**缩短**默认超时，不能放大
 - `-o=...` / `-coverprofile=...` 这类 inline 路径参数也会再次校验，不能写到工作目录外
 - `-vettool` 当前明确不支持
@@ -681,6 +682,23 @@ curl -s http://127.0.0.1:8080/mcp \
         "preset": "go_test",
         "workdir": ".",
         "args": ["./..."]
+      }
+    }
+  }'
+```
+
+### 12.1 go_mod_tidy 示例
+
+```bash
+curl -s http://127.0.0.1:8080/mcp   -H 'Authorization: Bearer change-me'   -H "Mcp-Session-Id: ${SESSION_ID}"   -H 'Content-Type: application/json'   -d '{
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "tools/call",
+    "params": {
+      "name": "exec.run",
+      "arguments": {
+        "preset": "go_mod_tidy",
+        "workdir": "."
       }
     }
   }'

@@ -202,6 +202,7 @@ data: {jsonrpc response or notification}
 - `go_test`
 - `go_build`
 - `go_vet`
+- `go_mod_tidy`
 
 这不是 shell。客户端不能发送任意命令字符串。
 
@@ -332,6 +333,7 @@ data: {jsonrpc response or notification}
 - 不是 shell，只能运行预定义 preset
 - `workdir` 必填，且必须落在 `allowed_roots` 内
 - `go_test` / `go_build` / `go_vet` 没有显式 target 时会自动补 `./...`
+- `go_mod_tidy` 会直接在 `workdir` 里执行 `go mod tidy`
 - `timeout_override_sec` 只能缩短默认超时
 - `-vettool` 不支持
 - `-o=...` / `-coverprofile=...` 这类 inline 路径值也会再次校验，不能写到 workdir 外

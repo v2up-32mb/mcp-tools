@@ -25,6 +25,8 @@ var inlineValueAllowedFlags = map[string]bool{
 	"-tags":         true,
 	"-o":            true,
 	"-coverprofile": true,
+	"-go":           true,
+	"-compat":       true,
 }
 
 var inlinePathFlags = map[string]bool{
@@ -42,7 +44,7 @@ func NewTools(cfg config.Config) []mcp.Tool {
 
 func (configuredTool) Name() string { return "exec.run" }
 func (configuredTool) Description() string {
-	return "Run a predefined Go toolchain preset inside an allowed working directory. workdir is required; go_test/go_build/go_vet default to ./... when no target is provided; timeout_override_sec can only shorten the preset timeout; inline output paths are revalidated; -vettool is not supported."
+	return "Run a predefined Go toolchain preset inside an allowed working directory. workdir is required; go_test/go_build/go_vet default to ./... when no target is provided; go_mod_tidy runs go mod tidy in the workdir; timeout_override_sec can only shorten the preset timeout; inline output paths are revalidated; -vettool is not supported."
 }
 func (configuredTool) ReadOnly() bool { return false }
 func (configuredTool) Schema() map[string]any {
