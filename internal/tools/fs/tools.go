@@ -42,6 +42,7 @@ func NewTools(cfg config.Config) []mcp.Tool {
 		tool{name: "fs.move_path", desc: "Move or rename src to dst. Both src and dst must stay inside allowed roots; missing destination parents are created.", schema: schemaMove(), call: movePath(cfg)},
 		tool{name: "fs.delete_path", desc: "Delete a file or an empty directory. This is not recursive delete; non-empty directories will fail.", schema: schemaPath(), call: deletePath(cfg)},
 		tool{name: "fs.search_text", desc: "Search by plain substring in one file or recursively under a directory. Default limit is 200, max 1000, and long lines are supported.", schema: schemaSearch(), readOnly: true, call: searchText(cfg)},
+		tool{name: "fs.replace_text", desc: "Replace exact old_text with new_text in one file. Supports replace-first or replace-all and can assert expected_replacements before writing.", schema: schemaReplaceText(), call: replaceText(cfg)},
 		tool{name: "fs.edit_lines", desc: "Strictly replace a 1-based line range. new_text is interpreted as logical lines; blank lines are preserved, empty string deletes the range, and \"\n\" inserts one blank line. expected_old_text can be used as an optimistic concurrency check.", schema: schemaEditLines(), call: editLines(cfg)},
 	}
 }
@@ -234,6 +235,69 @@ func searchText(cfg config.Config) func(context.Context, mcp.CallContext, map[st
 			"path":    path,
 			"query":   query,
 			"matches": matches,
+		}, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: summary}), nil
+	}
+}
+
+func replaceText(cfg config.Config) func(context.Context, mcp.CallContext, map[string]any) (mcp.Result, error) {
+	return func(_ context.Context, _ mcp.CallContext, args map[string]any) (mcp.Result, error) {
+		path, err := resolvePathArg(args, "path", cfg)
+		if err != nil {
+			return mcp.Result{}, err
+		}
+		oldText, ok := args["old_text"].(string)
+		if !ok || oldText == "" {
+			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("old_text required and cannot be empty"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		}
+		newText, ok := args["new_text"].(string)
+		if !ok {
+			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("new_text required"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		}
+		replaceAll, _ := args["replace_all"].(bool)
+		expectedReplacements := -1
+		switch v := args["expected_replacements"].(type) {
+		case float64:
+			expectedReplacements = int(v)
+		case int:
+			expectedReplacements = v
+		}
+		if expectedReplacements < -1 {
+			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("expected_replacements must be >= 0"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		}
+
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "read failed"})
+		}
+		content := string(payload)
+		matches := strings.Count(content, oldText)
+		if matches == 0 {
+			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("old_text not found"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "replace precondition failed"})
+		}
+		if expectedReplacements >= 0 && matches != expectedReplacements {
+			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("expected_replacements mismatch"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "replace precondition failed"})
+		}
+
+		updated := content
+		replacedCount := 1
+		if replaceAll {
+			updated = strings.ReplaceAll(content, oldText, newText)
+			replacedCount = matches
+		} else {
+			updated = strings.Replace(content, oldText, newText, 1)
+		}
+		if err := atomicWrite(path, []byte(updated)); err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "write failed"})
+		}
+		summary := fmt.Sprintf("replaced %d occurrence(s)", replacedCount)
+		return mcp.TextResult(summary, map[string]any{
+			"summary":              summary,
+			"path":                 path,
+			"replace_all":          replaceAll,
+			"matched_occurrences":  matches,
+			"replaced_occurrences": replacedCount,
+			"old_text":             oldText,
+			"new_text":             newText,
 		}, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: summary}), nil
 	}
 }
@@ -544,6 +608,21 @@ func schemaSearch() map[string]any {
 			"limit": map[string]any{"type": "integer"},
 		},
 		"required": []string{"path", "query"},
+	}
+}
+
+func schemaReplaceText() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"path":                  map[string]any{"type": "string"},
+			"old_text":              map[string]any{"type": "string"},
+			"new_text":              map[string]any{"type": "string"},
+			"replace_all":           map[string]any{"type": "boolean"},
+			"expected_replacements": map[string]any{"type": "integer"},
+		},
+		"required": []string{"path", "old_text", "new_text"},
 	}
 }
 

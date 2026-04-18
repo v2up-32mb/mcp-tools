@@ -44,7 +44,7 @@ func NewTools(cfg config.Config) []mcp.Tool {
 
 func (configuredTool) Name() string { return "exec.run" }
 func (configuredTool) Description() string {
-	return "Run a predefined Go toolchain preset inside an allowed working directory. workdir is required; go_test/go_build/go_vet default to ./... when no target is provided; go_mod_tidy runs go mod tidy in the workdir; timeout_override_sec can only shorten the preset timeout; inline output paths are revalidated; -vettool is not supported."
+	return "Run a predefined Go toolchain preset inside an allowed working directory. workdir is required; go_test/go_generate/go_build/go_vet default to ./... when no target is provided; go_mod_download and go_mod_tidy run directly in workdir; timeout_override_sec can only shorten the preset timeout; inline output paths are revalidated; -vettool is not supported."
 }
 func (configuredTool) ReadOnly() bool { return false }
 func (configuredTool) Schema() map[string]any {
@@ -186,7 +186,7 @@ func validateArgs(presetName string, preset config.ExecPreset, raw any) ([]strin
 
 func defaultTargetsForPreset(preset string) []string {
 	switch preset {
-	case "go_test", "go_build", "go_vet":
+	case "go_test", "go_generate", "go_build", "go_vet":
 		return []string{"./..."}
 	default:
 		return nil

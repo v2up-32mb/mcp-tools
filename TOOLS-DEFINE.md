@@ -185,7 +185,34 @@
 
 ---
 
-## 3.8 `fs.search_text`
+## 3.8 `fs.replace_text`
+
+### 作用
+在单个文件中按精确旧文本替换新文本。
+
+### 输入参数
+- `path`
+- `old_text`
+- `new_text`
+- `replace_all`（可选）
+- `expected_replacements`（可选）
+
+### 关键步骤
+1. 解析 `path`
+2. 要求 `old_text` 非空
+3. 读取整个文件内容
+4. 用 `strings.Count` 统计命中数
+5. 若没有命中则失败
+6. 若提供 `expected_replacements`，则要求总命中数完全一致
+7. 默认只替换第一处命中；`replace_all=true` 时替换全部
+8. `atomicWrite`
+
+### 副作用
+- 成功后会发送 `resources/updated`
+
+---
+
+## 3.9 `fs.search_text`
 
 ### 作用
 在文件或目录树中按子串搜索。
@@ -214,7 +241,7 @@
 
 ---
 
-## 3.9 `fs.edit_lines`
+## 3.10 `fs.edit_lines`
 
 ### 作用
 按 **1-based 行区间** 做严格行替换，减少上下文传输成本。
@@ -389,7 +416,9 @@ git pull --ff-only
 面向 Go：
 
 - `go_fmt`
+- `go_mod_download`
 - `go_test`
+- `go_generate`
 - `go_build`
 - `go_vet`
 - `go_mod_tidy`
@@ -398,7 +427,8 @@ git pull --ff-only
 ### 参数白名单策略
 - 以 `-` 开头的参数必须匹配 `AllowedArgs`
 - 非 flag 参数必须是 workdir 内的本地 target
-- `go_test` / `go_build` / `go_vet` 在没有显式 target 时会自动补 `./...`
+- `go_test` / `go_generate` / `go_build` / `go_vet` 在没有显式 target 时会自动补 `./...`
+- `go_mod_download` 会直接在 `workdir` 中执行 `go mod download`
 - `go_mod_tidy` 不会自动补 target，而是直接在 `workdir` 中执行 `go mod tidy`
 - `timeout_override_sec` 只允许缩短默认超时
 - 禁止绝对路径、URL、`..` 越界路径

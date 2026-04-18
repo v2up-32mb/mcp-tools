@@ -380,12 +380,24 @@ func defaultExecPresets(baseTimeout time.Duration) map[string]ExecPreset {
 			AllowedArgs: []string{"-s", "-l"},
 			Timeout:     baseTimeout,
 		},
+		"go_mod_download": {
+			Command:     "go",
+			FixedArgs:   []string{"mod", "download"},
+			AllowedArgs: []string{"-x", "-json"},
+			Timeout:     baseTimeout,
+		},
 		"go_test": {
 			Command:     "go",
 			FixedArgs:   []string{"test"},
 			AllowedArgs: []string{"-run", "-count", "-timeout", "-v", "-race", "-cover", "-coverprofile"},
 			Timeout:     baseTimeout,
 			ReadOnly:    true,
+		},
+		"go_generate": {
+			Command:     "go",
+			FixedArgs:   []string{"generate"},
+			AllowedArgs: []string{"-run", "-skip", "-v", "-x", "-n", "-tags"},
+			Timeout:     baseTimeout,
 		},
 		"go_build": {
 			Command:     "go",

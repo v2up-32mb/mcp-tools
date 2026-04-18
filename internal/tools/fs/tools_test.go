@@ -236,3 +236,80 @@ func TestSearchTextSupportsLongLines(t *testing.T) {
 		t.Fatal("expected at least one match")
 	}
 }
+
+func TestReplaceTextReplacesFirstOccurrenceByDefault(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.replace_text")
+	target := filepath.Join(cfg.StartupDirectory, "replace-first.txt")
+	if err := os.WriteFile(target, []byte("hello foo world foo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":     "replace-first.txt",
+		"old_text": "foo",
+		"new_text": "bar",
+	})
+	if err != nil {
+		t.Fatalf("replace_text failed: %v", err)
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "hello bar world foo\n"
+	if string(got) != want {
+		t.Fatalf("unexpected file contents\nwant: %q\ngot:  %q", want, string(got))
+	}
+}
+
+func TestReplaceTextReplacesAllOccurrences(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.replace_text")
+	target := filepath.Join(cfg.StartupDirectory, "replace-all.txt")
+	if err := os.WriteFile(target, []byte("a foo b foo c\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":        "replace-all.txt",
+		"old_text":    "foo",
+		"new_text":    "bar",
+		"replace_all": true,
+	})
+	if err != nil {
+		t.Fatalf("replace_text failed: %v", err)
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "a bar b bar c\n"
+	if string(got) != want {
+		t.Fatalf("unexpected file contents\nwant: %q\ngot:  %q", want, string(got))
+	}
+}
+
+func TestReplaceTextRejectsExpectedReplacementMismatch(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.replace_text")
+	target := filepath.Join(cfg.StartupDirectory, "replace-mismatch.txt")
+	if err := os.WriteFile(target, []byte("foo foo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":                  "replace-mismatch.txt",
+		"old_text":              "foo",
+		"new_text":              "bar",
+		"expected_replacements": 1,
+	})
+	if err == nil {
+		t.Fatal("expected replacement mismatch error")
+	}
+	if !strings.Contains(err.Error(), "expected_replacements mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

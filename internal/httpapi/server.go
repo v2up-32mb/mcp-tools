@@ -997,7 +997,7 @@ func (s *Server) maybeNotifyResourceUpdated(toolName string, args map[string]any
 	}
 	var uris []string
 	switch toolName {
-	case "fs.write_file", "fs.edit_lines", "fs.make_dir", "fs.delete_path":
+	case "fs.write_file", "fs.replace_text", "fs.edit_lines", "fs.make_dir", "fs.delete_path":
 		if path, _ := args["path"].(string); strings.TrimSpace(path) != "" {
 			if resolved, err := security.ResolvePath(resolveAgainstStartup(path, s.cfg.StartupDirectory), s.cfg.AllowedRoots); err == nil {
 				uris = append(uris, resourceUpdateTargets(resolved, s.cfg.AllowedRoots)...)

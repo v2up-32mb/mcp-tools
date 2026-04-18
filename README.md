@@ -44,7 +44,7 @@
   - `git.pull`
 - **Exec 工具**
   - `exec.run`
-  - 仅开放 Go preset：`go_fmt` / `go_test` / `go_build` / `go_vet` / `go_mod_tidy`
+  - 仅开放 Go preset：`go_fmt` / `go_mod_download` / `go_test` / `go_generate` / `go_build` / `go_vet` / `go_mod_tidy`
 - 审计日志：JSON Lines
 - 目录边界：启动目录 + `allowed_roots`
 - 浏览器 Origin 拒绝：未配置 `allowed_origins` / `MCP_ALLOWED_ORIGINS` 时默认不接受浏览器来源请求
@@ -538,7 +538,7 @@ curl -s http://127.0.0.1:8080/mcp \
   -d '{"jsonrpc":"2.0","id":71,"method":"resources/subscribe","params":{"uri":"file:///your/allowed/root/README.md"}}'
 ```
 
-订阅后，如果该资源被 `fs.write_file` / `fs.edit_lines` / `fs.move_path` / `fs.delete_path` / `fs.make_dir` 等工具修改，对应 session 的 SSE stream 会收到：
+订阅后，如果该资源被 `fs.write_file` / `fs.replace_text` / `fs.edit_lines` / `fs.move_path` / `fs.delete_path` / `fs.make_dir` 等工具修改，对应 session 的 SSE stream 会收到：
 
 ```text
 event: message
@@ -655,13 +655,24 @@ curl -s http://127.0.0.1:8080/mcp \
 - 不允许绝对路径，不允许 `..` 越界，不允许把路径伪装成选项
 - `git.pull` 固定是 `git pull --ff-only`
 
+### 11.2 fs.replace_text
+
+`fs.replace_text` 的使用细节：
+
+- 在单个文件中按**精确旧文本**替换新文本
+- 默认只替换**第一处命中**
+- `replace_all=true` 时替换所有命中
+- `expected_replacements` 可用于保护性校验，要求替换前总命中数必须一致
+- `old_text` 不能为空
+
 ### 12. exec.run
 
 `exec.run` 的使用细节：
 
 - 只能运行预定义 preset，不支持任意 shell 命令
 - `workdir` 必填，且必须落在 `allowed_roots` 内
-- `go_test` / `go_build` / `go_vet` 在没有显式 target 时，会自动补 `./...`
+- `go_test` / `go_generate` / `go_build` / `go_vet` 在没有显式 target 时，会自动补 `./...`
+- `go_mod_download` 会直接在 `workdir` 中执行 `go mod download`
 - `go_mod_tidy` 会直接在 `workdir` 中执行 `go mod tidy`，不会自动补目标路径
 - `timeout_override_sec` 只能**缩短**默认超时，不能放大
 - `-o=...` / `-coverprofile=...` 这类 inline 路径参数也会再次校验，不能写到工作目录外
@@ -698,6 +709,23 @@ curl -s http://127.0.0.1:8080/mcp   -H 'Authorization: Bearer change-me'   -H "M
       "name": "exec.run",
       "arguments": {
         "preset": "go_mod_tidy",
+        "workdir": "."
+      }
+    }
+  }'
+```
+
+### 12.2 go_generate 示例
+
+```bash
+curl -s http://127.0.0.1:8080/mcp   -H 'Authorization: Bearer change-me'   -H "Mcp-Session-Id: ${SESSION_ID}"   -H 'Content-Type: application/json'   -d '{
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "tools/call",
+    "params": {
+      "name": "exec.run",
+      "arguments": {
+        "preset": "go_generate",
         "workdir": "."
       }
     }

@@ -132,6 +132,15 @@ exec:
       timeout_sec: 30
       read_only: false
 
+    # go mod download
+    go_mod_download:
+      enabled: true
+      command: go
+      fixed_args: ["mod", "download"]
+      allowed_args: ["-x", "-json"]
+      timeout_sec: 30
+      read_only: false
+
     # go test
     go_test:
       enabled: true
@@ -140,6 +149,15 @@ exec:
       allowed_args: ["-run", "-count", "-timeout", "-v", "-race", "-cover", "-coverprofile"]
       timeout_sec: 30
       read_only: true
+
+    # go generate
+    go_generate:
+      enabled: true
+      command: go
+      fixed_args: ["generate"]
+      allowed_args: ["-run", "-skip", "-v", "-x", "-n", "-tags"]
+      timeout_sec: 30
+      read_only: false
 
     # go build
     go_build:
