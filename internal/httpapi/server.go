@@ -385,6 +385,7 @@ func (s *Server) callTool(r *http.Request, req rpcRequest, w http.ResponseWriter
 		SessionID:       sess.ID,
 		ProtocolVersion: sess.ProtocolVersion,
 	}, toolName, args)
+	s.trackTemplateCall(toolName, args, result)
 	if err != nil {
 		if sse {
 			return mcp.ErrorResult(err.Error(), mcp.AuditData{Allowed: true, ResultDigest: "tool call error"}), true
@@ -1041,6 +1042,7 @@ func (s *Server) stateSnapshot() map[string]any {
 			"max_request_bytes":  s.cfg.MaxRequestBytes,
 			"command_timeout_ms": s.cfg.CommandTimeout.Milliseconds(),
 			"session_ttl_ms":     s.cfg.SessionTTL.Milliseconds(),
+			"command_templates":  summarizeCommandTemplates(s.cfg.CommandTemplates),
 		},
 		"runtime": map[string]any{
 			"active_sessions":                s.sessions.Count(),
@@ -1049,8 +1051,52 @@ func (s *Server) stateSnapshot() map[string]any {
 			"resource_subscription_sessions": s.resSubs.sessionCount(),
 			"resource_subscription_total":    s.resSubs.totalCount(),
 		},
-		"counters": s.metrics.snapshot(),
+		"counters":         s.metrics.snapshot(),
+		"template_metrics": s.metrics.templateSnapshot(),
 	}
+}
+
+func summarizeCommandTemplates(templates map[string]config.CommandTemplate) map[string]any {
+	out := make(map[string]any, len(templates))
+	for name, tpl := range templates {
+		entry := map[string]any{
+			"command":   cloneStrings(tpl.Command),
+			"read_only": tpl.ReadOnly,
+		}
+		if len(tpl.Env) > 0 {
+			keys := make([]string, 0, len(tpl.Env))
+			for key := range tpl.Env {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			entry["env_keys"] = keys
+		}
+		if len(tpl.AllowedWorkdirs) > 0 {
+			entry["allowed_workdirs"] = cloneStrings(tpl.AllowedWorkdirs)
+		}
+		out[name] = entry
+	}
+	return out
+}
+
+func (s *Server) trackTemplateCall(toolName string, args map[string]any, result mcp.Result) {
+	if toolName != "exec.run_template" {
+		return
+	}
+	templateName, _ := args["template"].(string)
+	if strings.TrimSpace(templateName) == "" {
+		templateName = "<unknown>"
+	}
+	s.metrics.recordTemplateCall(templateName, !result.IsError)
+}
+
+func cloneStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	out := make([]string, len(values))
+	copy(out, values)
+	return out
 }
 
 func resourceUpdateTargets(resolved string, allowedRoots []string) []string {

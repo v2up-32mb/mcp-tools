@@ -249,6 +249,8 @@ allowed_origins:
 - `git.allowed_subcommands` 只能配置当前实现支持的白名单子命令，**不支持 `push`**
 - `exec.presets.<name>.enabled: false` 可禁用内置 preset
 - `exec.command_templates.<name>` 可声明固定 argv 的模板命令，供 `exec.run_template` 调用
+- `exec.command_templates.<name>.env` 可配置模板级固定环境变量
+- `exec.command_templates.<name>.allowed_workdirs` 可限制模板只允许在指定工作目录范围内执行
 
 ## 启动
 

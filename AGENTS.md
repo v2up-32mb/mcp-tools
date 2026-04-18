@@ -370,6 +370,8 @@ data: {jsonrpc response or notification}
 
 - 不是任意 shell，而是引用服务端配置好的固定模板
 - 客户端只能指定 `template` 和 `workdir`
+- 模板可以有服务端固定 `env`，客户端不能覆盖
+- 模板可以额外配置 `allowed_workdirs`，进一步收紧工作目录范围
 - `workdir` 仍然必须落在 `allowed_roots` 内
 - 适合逐步放开命令执行，而不炸开安全边界
 

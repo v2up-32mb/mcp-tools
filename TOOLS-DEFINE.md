@@ -462,14 +462,20 @@ git pull --ff-only
 2. 从配置中查找 `CommandTemplates[template]`
 3. 若不存在则拒绝
 4. 解析 `workdir` 并要求其落在 allowed roots 内
-5. 模板提供固定 argv，客户端不再额外传 args
-6. `timeout_override_sec` 只允许缩短
-7. 执行并审计
+5. 若模板配置了固定 `env`，则附加到子进程环境中
+6. 若模板配置了 `allowed_workdirs`，则 `workdir` 还必须命中这些范围之一
+7. 模板提供固定 argv，客户端不再额外传 args
+8. `timeout_override_sec` 只允许缩短
+9. 执行并审计
 
 ### 默认模板
 - `make_test`
 - `make_build`
 - `go_clean_testcache`
+
+### discoverability
+- `exec.run_template` 的 schema 中，`template` 字段会带当前模板名 `enum`
+- `/debug/statez` 会返回模板元信息（command/read_only/env_keys/allowed_workdirs）和模板调用计数
 
 ---
 

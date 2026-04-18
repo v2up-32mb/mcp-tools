@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,5 +95,68 @@ func TestRunTemplateTimeoutOverrideOnlyShortens(t *testing.T) {
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res)
+	}
+}
+
+func TestRunTemplateSchemaEnumeratesConfiguredTemplates(t *testing.T) {
+	cfg := config.Config{CommandTemplates: map[string]config.CommandTemplate{
+		"make_test":  {Command: []string{"make", "test"}, Timeout: time.Second},
+		"make_build": {Command: []string{"make", "build"}, Timeout: time.Second},
+	}}
+	tool := findTool(t, cfg, "exec.run_template")
+	schema := tool.Schema()
+	props := schema["properties"].(map[string]any)
+	templateProp := props["template"].(map[string]any)
+	enum := templateProp["enum"].([]string)
+	if len(enum) != 2 || enum[0] != "make_build" || enum[1] != "make_test" {
+		t.Fatalf("unexpected template enum: %#v", enum)
+	}
+}
+
+func TestRunTemplateInjectsConfiguredEnv(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		CommandTemplates: map[string]config.CommandTemplate{
+			"envdump": {Command: []string{"env"}, Env: map[string]string{"MCP_TEMPLATE_TEST": "hello"}, Timeout: 5 * time.Second},
+		},
+	}
+	tool := findTool(t, cfg, "exec.run_template")
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"template": "envdump",
+		"workdir":  ".",
+	})
+	if err != nil {
+		t.Fatalf("run_template failed: %v", err)
+	}
+	if !strings.Contains(res.Content[0].Text, "MCP_TEMPLATE_TEST=hello") {
+		t.Fatalf("expected injected env in output, got %#v", res.Content)
+	}
+}
+
+func TestRunTemplateRejectsWorkdirOutsideTemplateScope(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		CommandTemplates: map[string]config.CommandTemplate{
+			"pwd": {Command: []string{"pwd"}, AllowedWorkdirs: []string{"sub"}, Timeout: 5 * time.Second},
+		},
+	}
+	tool := findTool(t, cfg, "exec.run_template")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"template": "pwd",
+		"workdir":  ".",
+	})
+	if err == nil {
+		t.Fatal("expected workdir scope error")
 	}
 }

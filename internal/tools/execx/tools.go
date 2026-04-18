@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -66,16 +68,29 @@ func (configuredTool) Schema() map[string]any {
 }
 
 func (templateTool) Name() string { return "exec.run_template" }
-func (templateTool) Description() string {
-	return "Run a configured command template inside an allowed working directory. The template provides a fixed argv; clients may only choose template name, workdir, and an optional timeout override that can only shorten execution."
+func (t templateTool) Description() string {
+	names := sortedTemplateNames(t.cfg.CommandTemplates)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		tpl := t.cfg.CommandTemplates[name]
+		parts = append(parts, fmt.Sprintf("%s(read_only=%t)", name, tpl.ReadOnly))
+	}
+	detail := strings.Join(parts, ", ")
+	if detail == "" {
+		detail = "no templates configured"
+	}
+	return "Run a configured command template inside an allowed working directory. The template provides a fixed argv; clients may only choose template name, workdir, and an optional timeout override that can only shorten execution. Available templates: " + detail + "."
 }
 func (templateTool) ReadOnly() bool { return false }
-func (templateTool) Schema() map[string]any {
+func (t templateTool) Schema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"template":             map[string]any{"type": "string"},
+			"template": map[string]any{
+				"type": "string",
+				"enum": sortedTemplateNames(t.cfg.CommandTemplates),
+			},
 			"workdir":              map[string]any{"type": "string"},
 			"timeout_override_sec": map[string]any{"type": "integer"},
 		},
@@ -93,9 +108,12 @@ func (t templateTool) Call(ctx context.Context, _ mcp.CallContext, args map[stri
 	if err != nil {
 		return mcp.Result{}, err
 	}
+	if err := validateTemplateWorkdir(t.cfg, template, resolvedWorkdir); err != nil {
+		return mcp.Result{}, err
+	}
 	argv := cloneStrings(template.Command)
 	timeout := applyTimeoutOverride(template.Timeout, args["timeout_override_sec"])
-	return runExecCommand(ctx, t.cfg, templateName, "template", argv, resolvedWorkdir, rawWorkdir, timeout)
+	return runExecCommand(ctx, t.cfg, templateName, "template", argv, resolvedWorkdir, rawWorkdir, timeout, template.Env, template.ReadOnly)
 }
 
 func (t configuredTool) Call(ctx context.Context, _ mcp.CallContext, args map[string]any) (mcp.Result, error) {
@@ -121,7 +139,7 @@ func (t configuredTool) Call(ctx context.Context, _ mcp.CallContext, args map[st
 
 	timeout := applyTimeoutOverride(preset.Timeout, args["timeout_override_sec"])
 	fullArgv := append([]string{preset.Command}, argv...)
-	return runExecCommand(ctx, t.cfg, presetName, "preset", fullArgv, resolvedWorkdir, rawWorkdir, timeout)
+	return runExecCommand(ctx, t.cfg, presetName, "preset", fullArgv, resolvedWorkdir, rawWorkdir, timeout, nil, preset.ReadOnly)
 }
 
 func resolveWorkdir(cfg config.Config, args map[string]any) (string, string, error) {
@@ -156,11 +174,12 @@ func applyTimeoutOverride(timeout time.Duration, raw any) time.Duration {
 	return timeout
 }
 
-func runExecCommand(ctx context.Context, cfg config.Config, name string, mode string, argv []string, resolvedWorkdir string, rawWorkdir string, timeout time.Duration) (mcp.Result, error) {
+func runExecCommand(ctx context.Context, cfg config.Config, name string, mode string, argv []string, resolvedWorkdir string, rawWorkdir string, timeout time.Duration, fixedEnv map[string]string, readOnly bool) (mcp.Result, error) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	cmd.Dir = resolvedWorkdir
+	cmd.Env = mergeCommandEnv(os.Environ(), fixedEnv)
 	var stdoutBuf bytes.Buffer
 	var stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
@@ -187,17 +206,71 @@ func runExecCommand(ctx context.Context, cfg config.Config, name string, mode st
 		text = summary
 	}
 	structured := map[string]any{
-		"summary": summary,
-		"workdir": resolvedWorkdir,
-		"stdout":  stdout,
-		"stderr":  stderr,
-		"argv":    argv,
-		mode:      name,
+		"summary":   summary,
+		"workdir":   resolvedWorkdir,
+		"stdout":    stdout,
+		"stderr":    stderr,
+		"argv":      argv,
+		"read_only": readOnly,
+		mode:        name,
+	}
+	if len(fixedEnv) > 0 {
+		structured["env_keys"] = sortedEnvKeys(fixedEnv)
 	}
 	if strings.TrimSpace(rawWorkdir) != "" {
 		structured["requested_workdir"] = rawWorkdir
 	}
 	return mcp.TextResult(text, structured, auditData), nil
+}
+
+func validateTemplateWorkdir(cfg config.Config, template config.CommandTemplate, resolvedWorkdir string) error {
+	if len(template.AllowedWorkdirs) == 0 {
+		return nil
+	}
+	for _, candidate := range template.AllowedWorkdirs {
+		base := candidate
+		if !filepath.IsAbs(base) {
+			base = filepath.Join(cfg.StartupDirectory, base)
+		}
+		allowedDir, err := security.RequireAllowedWorkdir(base, cfg.AllowedRoots)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(allowedDir, resolvedWorkdir)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil
+		}
+	}
+	return mcp.WrapToolError(fmt.Errorf("workdir not allowed for template"), mcp.AuditData{TargetPath: resolvedWorkdir, Allowed: false, ResultDigest: "workdir rejected"})
+}
+
+func mergeCommandEnv(base []string, fixed map[string]string) []string {
+	if len(fixed) == 0 {
+		return base
+	}
+	merged := cloneStrings(base)
+	for key, value := range fixed {
+		merged = append(merged, key+"="+value)
+	}
+	return merged
+}
+
+func sortedTemplateNames(values map[string]config.CommandTemplate) []string {
+	out := make([]string, 0, len(values))
+	for key := range values {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedEnvKeys(values map[string]string) []string {
+	out := make([]string, 0, len(values))
+	for key := range values {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func validateArgs(presetName string, preset config.ExecPreset, raw any) ([]string, error) {

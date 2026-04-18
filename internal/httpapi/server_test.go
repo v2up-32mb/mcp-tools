@@ -1086,3 +1086,79 @@ func TestDebugHTTPLogDoesNotLeakBearerToken(t *testing.T) {
 		t.Fatalf("expected bearer scheme in logs, got %s", logs)
 	}
 }
+
+func TestStatezIncludesTemplateMetadataAndCounters(t *testing.T) {
+	handler, _, _ := newTestServerWithConfig(t, func(cfg *config.Config) {
+		cfg.CommandTemplates = map[string]config.CommandTemplate{
+			"gomod": {
+				Command:         []string{"go", "env", "GOMOD"},
+				Env:             map[string]string{"MCP_TEMPLATE_TEST": "hello"},
+				AllowedWorkdirs: []string{"."},
+				Timeout:         5 * time.Second,
+				ReadOnly:        true,
+			},
+		}
+	})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	sessionID := initializeSessionHTTP(t, ts.URL)
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      999,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "exec.run_template",
+			"arguments": map[string]any{
+				"template": "gomod",
+				"workdir":  ".",
+			},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("template request failed: %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	stateReq, err := http.NewRequest(http.MethodGet, ts.URL+"/debug/statez", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateReq.Header.Set("Authorization", "Bearer secret")
+	stateResp, err := http.DefaultClient.Do(stateReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stateResp.Body.Close()
+	if stateResp.StatusCode != http.StatusOK {
+		payload, _ := io.ReadAll(stateResp.Body)
+		t.Fatalf("expected 200, got %d body=%s", stateResp.StatusCode, payload)
+	}
+	var snapshot map[string]any
+	if err := json.NewDecoder(stateResp.Body).Decode(&snapshot); err != nil {
+		t.Fatalf("decode statez: %v", err)
+	}
+	configSection := snapshot["config"].(map[string]any)
+	templates := configSection["command_templates"].(map[string]any)
+	gomod := templates["gomod"].(map[string]any)
+	if gomod["read_only"] != true {
+		t.Fatalf("expected read_only template metadata, got %#v", gomod)
+	}
+	envKeys := gomod["env_keys"].([]any)
+	if len(envKeys) != 1 || envKeys[0].(string) != "MCP_TEMPLATE_TEST" {
+		t.Fatalf("unexpected env keys: %#v", envKeys)
+	}
+	metrics := snapshot["template_metrics"].(map[string]any)
+	if metrics["attempts"].(float64) < 1 || metrics["success"].(float64) < 1 {
+		t.Fatalf("unexpected template metrics: %#v", metrics)
+	}
+	perTemplate := metrics["per_template"].(map[string]any)
+	if perTemplate["gomod"].(float64) < 1 {
+		t.Fatalf("expected per-template metrics for gomod, got %#v", perTemplate)
+	}
+}

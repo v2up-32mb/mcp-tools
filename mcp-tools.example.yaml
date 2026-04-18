@@ -192,17 +192,21 @@ exec:
       make_test:
         enabled: true
         command: ["make", "test"]
+        allowed_workdirs: ["."]
         timeout_sec: 30
         read_only: false
 
       make_build:
         enabled: true
         command: ["make", "build"]
+        allowed_workdirs: ["."]
         timeout_sec: 30
         read_only: false
 
       go_clean_testcache:
         enabled: true
         command: ["go", "clean", "-testcache"]
+        env:
+          GOFLAGS: ""
         timeout_sec: 30
         read_only: false

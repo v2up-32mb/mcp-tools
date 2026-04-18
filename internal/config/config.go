@@ -66,9 +66,11 @@ type ExecPreset struct {
 }
 
 type CommandTemplate struct {
-	Command  []string
-	Timeout  time.Duration
-	ReadOnly bool
+	Command         []string
+	Env             map[string]string
+	AllowedWorkdirs []string
+	Timeout         time.Duration
+	ReadOnly        bool
 }
 
 type LoadOptions struct {
@@ -118,10 +120,12 @@ type fileExecPreset struct {
 }
 
 type fileCommandTemplate struct {
-	Enabled    *bool    `yaml:"enabled"`
-	Command    []string `yaml:"command"`
-	TimeoutSec *int     `yaml:"timeout_sec"`
-	ReadOnly   *bool    `yaml:"read_only"`
+	Enabled         *bool             `yaml:"enabled"`
+	Command         []string          `yaml:"command"`
+	Env             map[string]string `yaml:"env"`
+	AllowedWorkdirs []string          `yaml:"allowed_workdirs"`
+	TimeoutSec      *int              `yaml:"timeout_sec"`
+	ReadOnly        *bool             `yaml:"read_only"`
 }
 
 func Load() (Config, error) {
@@ -447,16 +451,19 @@ func defaultExecPresets(baseTimeout time.Duration) map[string]ExecPreset {
 func defaultCommandTemplates(baseTimeout time.Duration) map[string]CommandTemplate {
 	return map[string]CommandTemplate{
 		"make_test": {
-			Command: []string{"make", "test"},
-			Timeout: baseTimeout,
+			Command:  []string{"make", "test"},
+			Timeout:  baseTimeout,
+			ReadOnly: false,
 		},
 		"make_build": {
-			Command: []string{"make", "build"},
-			Timeout: baseTimeout,
+			Command:  []string{"make", "build"},
+			Timeout:  baseTimeout,
+			ReadOnly: false,
 		},
 		"go_clean_testcache": {
-			Command: []string{"go", "clean", "-testcache"},
-			Timeout: baseTimeout,
+			Command:  []string{"go", "clean", "-testcache"},
+			Timeout:  baseTimeout,
+			ReadOnly: false,
 		},
 	}
 }
@@ -517,6 +524,12 @@ func mergeCommandTemplates(base map[string]CommandTemplate, overrides map[string
 		}
 		if override.Command != nil {
 			template.Command = cloneStrings(override.Command)
+		}
+		if override.Env != nil {
+			template.Env = cloneMapStrings(override.Env)
+		}
+		if override.AllowedWorkdirs != nil {
+			template.AllowedWorkdirs = cloneStrings(override.AllowedWorkdirs)
 		}
 		if override.TimeoutSec != nil {
 			template.Timeout = time.Duration(*override.TimeoutSec) * time.Second
@@ -606,6 +619,11 @@ func validateConfig(cfg Config) error {
 		for _, part := range template.Command {
 			if strings.TrimSpace(part) == "" {
 				return fmt.Errorf("command template %q cannot contain empty command parts", name)
+			}
+		}
+		for _, workdir := range template.AllowedWorkdirs {
+			if strings.TrimSpace(workdir) == "" {
+				return fmt.Errorf("command template %q cannot contain empty allowed_workdirs entries", name)
 			}
 		}
 		if template.Timeout <= 0 {
@@ -748,4 +766,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func cloneMapStrings(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for k, v := range values {
+		out[k] = v
+	}
+	return out
 }
