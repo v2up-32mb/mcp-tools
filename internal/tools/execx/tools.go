@@ -38,8 +38,12 @@ type configuredTool struct {
 	cfg config.Config
 }
 
+type templateTool struct {
+	cfg config.Config
+}
+
 func NewTools(cfg config.Config) []mcp.Tool {
-	return []mcp.Tool{configuredTool{cfg: cfg}}
+	return []mcp.Tool{configuredTool{cfg: cfg}, templateTool{cfg: cfg}}
 }
 
 func (configuredTool) Name() string { return "exec.run" }
@@ -61,6 +65,39 @@ func (configuredTool) Schema() map[string]any {
 	}
 }
 
+func (templateTool) Name() string { return "exec.run_template" }
+func (templateTool) Description() string {
+	return "Run a configured command template inside an allowed working directory. The template provides a fixed argv; clients may only choose template name, workdir, and an optional timeout override that can only shorten execution."
+}
+func (templateTool) ReadOnly() bool { return false }
+func (templateTool) Schema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"template":             map[string]any{"type": "string"},
+			"workdir":              map[string]any{"type": "string"},
+			"timeout_override_sec": map[string]any{"type": "integer"},
+		},
+		"required": []string{"template", "workdir"},
+	}
+}
+
+func (t templateTool) Call(ctx context.Context, _ mcp.CallContext, args map[string]any) (mcp.Result, error) {
+	templateName, _ := args["template"].(string)
+	template, ok := t.cfg.CommandTemplates[templateName]
+	if !ok {
+		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("template %q not allowed", templateName), mcp.AuditData{Allowed: true, ResultDigest: "template blocked"})
+	}
+	resolvedWorkdir, rawWorkdir, err := resolveWorkdir(t.cfg, args)
+	if err != nil {
+		return mcp.Result{}, err
+	}
+	argv := cloneStrings(template.Command)
+	timeout := applyTimeoutOverride(template.Timeout, args["timeout_override_sec"])
+	return runExecCommand(ctx, t.cfg, templateName, "template", argv, resolvedWorkdir, rawWorkdir, timeout)
+}
+
 func (t configuredTool) Call(ctx context.Context, _ mcp.CallContext, args map[string]any) (mcp.Result, error) {
 	presetName, _ := args["preset"].(string)
 	preset, ok := t.cfg.ExecPresets[presetName]
@@ -68,17 +105,9 @@ func (t configuredTool) Call(ctx context.Context, _ mcp.CallContext, args map[st
 		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("preset %q not allowed", presetName), mcp.AuditData{Allowed: true, ResultDigest: "preset blocked"})
 	}
 
-	rawWorkdir, _ := args["workdir"].(string)
-	if strings.TrimSpace(rawWorkdir) == "" {
-		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("workdir required"), mcp.AuditData{Allowed: true, ResultDigest: "validation failed"})
-	}
-	workdir := rawWorkdir
-	if !filepath.IsAbs(workdir) {
-		workdir = filepath.Join(t.cfg.StartupDirectory, workdir)
-	}
-	resolvedWorkdir, err := security.RequireAllowedWorkdir(workdir, t.cfg.AllowedRoots)
+	resolvedWorkdir, rawWorkdir, err := resolveWorkdir(t.cfg, args)
 	if err != nil {
-		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("workdir: %w", err), mcp.AuditData{TargetPath: rawWorkdir, Allowed: false, ResultDigest: "workdir rejected"})
+		return mcp.Result{}, err
 	}
 
 	extraArgs, err := validateArgs(presetName, preset, args["args"])
@@ -90,26 +119,56 @@ func (t configuredTool) Call(ctx context.Context, _ mcp.CallContext, args map[st
 		argv = append(argv, defaultTargetsForPreset(presetName)...)
 	}
 
-	timeout := preset.Timeout
-	if value, ok := args["timeout_override_sec"].(float64); ok && value > 0 {
+	timeout := applyTimeoutOverride(preset.Timeout, args["timeout_override_sec"])
+	fullArgv := append([]string{preset.Command}, argv...)
+	return runExecCommand(ctx, t.cfg, presetName, "preset", fullArgv, resolvedWorkdir, rawWorkdir, timeout)
+}
+
+func resolveWorkdir(cfg config.Config, args map[string]any) (string, string, error) {
+	rawWorkdir, _ := args["workdir"].(string)
+	if strings.TrimSpace(rawWorkdir) == "" {
+		return "", "", mcp.WrapToolError(fmt.Errorf("workdir required"), mcp.AuditData{Allowed: true, ResultDigest: "validation failed"})
+	}
+	workdir := rawWorkdir
+	if !filepath.IsAbs(workdir) {
+		workdir = filepath.Join(cfg.StartupDirectory, workdir)
+	}
+	resolvedWorkdir, err := security.RequireAllowedWorkdir(workdir, cfg.AllowedRoots)
+	if err != nil {
+		return "", rawWorkdir, mcp.WrapToolError(fmt.Errorf("workdir: %w", err), mcp.AuditData{TargetPath: rawWorkdir, Allowed: false, ResultDigest: "workdir rejected"})
+	}
+	return resolvedWorkdir, rawWorkdir, nil
+}
+
+func applyTimeoutOverride(timeout time.Duration, raw any) time.Duration {
+	if value, ok := raw.(float64); ok && value > 0 {
 		override := time.Duration(int(value)) * time.Second
 		if override < timeout {
-			timeout = override
+			return override
 		}
 	}
+	if value, ok := raw.(int); ok && value > 0 {
+		override := time.Duration(value) * time.Second
+		if override < timeout {
+			return override
+		}
+	}
+	return timeout
+}
 
+func runExecCommand(ctx context.Context, cfg config.Config, name string, mode string, argv []string, resolvedWorkdir string, rawWorkdir string, timeout time.Duration) (mcp.Result, error) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, preset.Command, argv...)
+	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	cmd.Dir = resolvedWorkdir
 	var stdoutBuf bytes.Buffer
 	var stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
-	err = cmd.Run()
-	stdout := truncate(stdoutBuf.String(), t.cfg.OutputMaxBytes)
-	stderr := truncate(stderrBuf.String(), t.cfg.OutputMaxBytes)
-	auditData := mcp.AuditData{Workdir: resolvedWorkdir, Allowed: true, Stdout: stdout, Stderr: stderr, ResultDigest: fmt.Sprintf("exec %s", presetName)}
+	err := cmd.Run()
+	stdout := truncate(stdoutBuf.String(), cfg.OutputMaxBytes)
+	stderr := truncate(stderrBuf.String(), cfg.OutputMaxBytes)
+	auditData := mcp.AuditData{Workdir: resolvedWorkdir, Allowed: true, Stdout: stdout, Stderr: stderr, ResultDigest: fmt.Sprintf("exec %s %s", mode, name)}
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			code := exitErr.ExitCode()
@@ -119,23 +178,26 @@ func (t configuredTool) Call(ctx context.Context, _ mcp.CallContext, args map[st
 		if message == "" {
 			message = err.Error()
 		}
-		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("exec %s failed: %s", presetName, message), auditData)
+		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("exec %s %s failed: %s", mode, name, message), auditData)
 	}
-
-	summary := fmt.Sprintf("exec %s ok", presetName)
+	summary := fmt.Sprintf("exec %s %s ok", mode, name)
 	auditData.ResultDigest = summary
 	text := strings.TrimSpace(stdout)
 	if text == "" {
 		text = summary
 	}
-	return mcp.TextResult(text, map[string]any{
+	structured := map[string]any{
 		"summary": summary,
-		"preset":  presetName,
 		"workdir": resolvedWorkdir,
 		"stdout":  stdout,
 		"stderr":  stderr,
-		"argv":    append([]string{preset.Command}, argv...),
-	}, auditData), nil
+		"argv":    argv,
+		mode:      name,
+	}
+	if strings.TrimSpace(rawWorkdir) != "" {
+		structured["requested_workdir"] = rawWorkdir
+	}
+	return mcp.TextResult(text, structured, auditData), nil
 }
 
 func validateArgs(presetName string, preset config.ExecPreset, raw any) ([]string, error) {
@@ -226,4 +288,13 @@ func truncate(text string, limit int) string {
 		return text
 	}
 	return text[:limit] + "\n[truncated]"
+}
+
+func cloneStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	out := make([]string, len(values))
+	copy(out, values)
+	return out
 }

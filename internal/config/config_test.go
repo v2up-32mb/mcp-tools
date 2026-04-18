@@ -266,3 +266,20 @@ func containsPath(values []string, target string) bool {
 	}
 	return false
 }
+
+func TestLoadDefaultCommandTemplatesPresent(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	setTestHomeDir(t, home)
+	t.Setenv("MCP_BEARER_TOKEN", "env-token")
+
+	cfg, err := LoadWithOptions(LoadOptions{WorkDir: root})
+	if err != nil {
+		t.Fatalf("LoadWithOptions error: %v", err)
+	}
+	for _, name := range []string{"make_test", "make_build", "go_clean_testcache"} {
+		if _, ok := cfg.CommandTemplates[name]; !ok {
+			t.Fatalf("expected default command template %q, got %#v", name, cfg.CommandTemplates)
+		}
+	}
+}

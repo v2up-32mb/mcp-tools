@@ -44,7 +44,9 @@
   - `git.pull`
 - **Exec 工具**
   - `exec.run`
+- `exec.run_template`
   - 仅开放 Go preset：`go_fmt` / `go_mod_download` / `go_test` / `go_generate` / `go_build` / `go_vet` / `go_mod_tidy`
+- 同时支持固定白名单命令模板：`make_test` / `make_build` / `go_clean_testcache`
 - 审计日志：JSON Lines
 - 目录边界：启动目录 + `allowed_roots`
 - 浏览器 Origin 拒绝：未配置 `allowed_origins` / `MCP_ALLOWED_ORIGINS` 时默认不接受浏览器来源请求
@@ -233,6 +235,7 @@ allowed_origins:
 - `supported_protocols`
 - `git.allowed_subcommands`
 - `exec.presets`
+- `exec.command_templates`
 
 说明：
 
@@ -245,6 +248,7 @@ allowed_origins:
 - `allowed_origins` 是浏览器 `Origin` 白名单；**不是 hostname 入站控制**
 - `git.allowed_subcommands` 只能配置当前实现支持的白名单子命令，**不支持 `push`**
 - `exec.presets.<name>.enabled: false` 可禁用内置 preset
+- `exec.command_templates.<name>` 可声明固定 argv 的模板命令，供 `exec.run_template` 调用
 
 ## 启动
 
@@ -726,6 +730,30 @@ curl -s http://127.0.0.1:8080/mcp   -H 'Authorization: Bearer change-me'   -H "M
       "name": "exec.run",
       "arguments": {
         "preset": "go_generate",
+        "workdir": "."
+      }
+    }
+  }'
+```
+
+### 12.3 exec.run_template
+
+`exec.run_template` 的使用细节：
+
+- 只能运行服务端配置好的模板命令
+- 客户端只能传：`template`、`workdir`、`timeout_override_sec`
+- 模板本身提供固定 argv，不支持任意 shell 字符串
+- `timeout_override_sec` 仍然只能缩短
+
+```bash
+curl -s http://127.0.0.1:8080/mcp   -H 'Authorization: Bearer change-me'   -H "Mcp-Session-Id: ${SESSION_ID}"   -H 'Content-Type: application/json'   -d '{
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "tools/call",
+    "params": {
+      "name": "exec.run_template",
+      "arguments": {
+        "template": "make_test",
         "workdir": "."
       }
     }

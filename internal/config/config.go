@@ -49,6 +49,7 @@ type Config struct {
 	IdleTimeout        time.Duration
 	GitAllowed         map[string]bool
 	ExecPresets        map[string]ExecPreset
+	CommandTemplates   map[string]CommandTemplate
 	StartupDirectory   string
 	SessionTTL         time.Duration
 	ServerName         string
@@ -62,6 +63,12 @@ type ExecPreset struct {
 	AllowedArgs []string
 	Timeout     time.Duration
 	ReadOnly    bool
+}
+
+type CommandTemplate struct {
+	Command  []string
+	Timeout  time.Duration
+	ReadOnly bool
 }
 
 type LoadOptions struct {
@@ -97,7 +104,8 @@ type fileGitConfig struct {
 }
 
 type fileExecConfig struct {
-	Presets map[string]fileExecPreset `yaml:"presets"`
+	Presets          map[string]fileExecPreset      `yaml:"presets"`
+	CommandTemplates map[string]fileCommandTemplate `yaml:"command_templates"`
 }
 
 type fileExecPreset struct {
@@ -107,6 +115,13 @@ type fileExecPreset struct {
 	AllowedArgs []string `yaml:"allowed_args"`
 	TimeoutSec  *int     `yaml:"timeout_sec"`
 	ReadOnly    *bool    `yaml:"read_only"`
+}
+
+type fileCommandTemplate struct {
+	Enabled    *bool    `yaml:"enabled"`
+	Command    []string `yaml:"command"`
+	TimeoutSec *int     `yaml:"timeout_sec"`
+	ReadOnly   *bool    `yaml:"read_only"`
 }
 
 func Load() (Config, error) {
@@ -173,6 +188,7 @@ func defaultConfig(cwd string) Config {
 		IdleTimeout:        60 * time.Second,
 		GitAllowed:         defaultGitAllowed(),
 		ExecPresets:        defaultExecPresets(timeout),
+		CommandTemplates:   defaultCommandTemplates(timeout),
 		StartupDirectory:   cwd,
 		SessionTTL:         120 * time.Minute,
 		ServerName:         "mcp-tools",
@@ -261,6 +277,13 @@ func applyYAMLFile(cfg *Config, path string) error {
 			return err
 		}
 		cfg.ExecPresets = merged
+	}
+	if len(fc.Exec.CommandTemplates) > 0 {
+		merged, err := mergeCommandTemplates(cfg.CommandTemplates, fc.Exec.CommandTemplates, cfg.CommandTimeout)
+		if err != nil {
+			return err
+		}
+		cfg.CommandTemplates = merged
 	}
 	return nil
 }
@@ -421,6 +444,23 @@ func defaultExecPresets(baseTimeout time.Duration) map[string]ExecPreset {
 	}
 }
 
+func defaultCommandTemplates(baseTimeout time.Duration) map[string]CommandTemplate {
+	return map[string]CommandTemplate{
+		"make_test": {
+			Command: []string{"make", "test"},
+			Timeout: baseTimeout,
+		},
+		"make_build": {
+			Command: []string{"make", "build"},
+			Timeout: baseTimeout,
+		},
+		"go_clean_testcache": {
+			Command: []string{"go", "clean", "-testcache"},
+			Timeout: baseTimeout,
+		},
+	}
+}
+
 func mergeExecPresets(base map[string]ExecPreset, overrides map[string]fileExecPreset, baseDir string, defaultTimeout time.Duration) (map[string]ExecPreset, error) {
 	merged := make(map[string]ExecPreset, len(base)+len(overrides))
 	for name, preset := range base {
@@ -454,6 +494,37 @@ func mergeExecPresets(base map[string]ExecPreset, overrides map[string]fileExecP
 			preset.ReadOnly = *override.ReadOnly
 		}
 		merged[name] = preset
+	}
+	return merged, nil
+}
+
+func mergeCommandTemplates(base map[string]CommandTemplate, overrides map[string]fileCommandTemplate, defaultTimeout time.Duration) (map[string]CommandTemplate, error) {
+	merged := make(map[string]CommandTemplate, len(base)+len(overrides))
+	for name, template := range base {
+		merged[name] = template
+	}
+	for name, override := range overrides {
+		if strings.TrimSpace(name) == "" {
+			return nil, errors.New("command template name cannot be empty")
+		}
+		if override.Enabled != nil && !*override.Enabled {
+			delete(merged, name)
+			continue
+		}
+		template, ok := merged[name]
+		if !ok {
+			template = CommandTemplate{Timeout: defaultTimeout}
+		}
+		if override.Command != nil {
+			template.Command = cloneStrings(override.Command)
+		}
+		if override.TimeoutSec != nil {
+			template.Timeout = time.Duration(*override.TimeoutSec) * time.Second
+		}
+		if override.ReadOnly != nil {
+			template.ReadOnly = *override.ReadOnly
+		}
+		merged[name] = template
 	}
 	return merged, nil
 }
@@ -523,6 +594,22 @@ func validateConfig(cfg Config) error {
 			if strings.TrimSpace(arg) == "-vettool" {
 				return fmt.Errorf("exec preset %q cannot allow -vettool", name)
 			}
+		}
+	}
+	for name, template := range cfg.CommandTemplates {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("command template name cannot be empty")
+		}
+		if len(template.Command) == 0 {
+			return fmt.Errorf("command template %q command required", name)
+		}
+		for _, part := range template.Command {
+			if strings.TrimSpace(part) == "" {
+				return fmt.Errorf("command template %q cannot contain empty command parts", name)
+			}
+		}
+		if template.Timeout <= 0 {
+			return fmt.Errorf("command template %q timeout must be positive", name)
 		}
 	}
 	return nil

@@ -196,6 +196,7 @@ data: {jsonrpc response or notification}
 ### 5.3 Exec 工具
 
 - `exec.run`
+- `exec.run_template`
 
 当前内置 preset 面向 Go：
 
@@ -206,7 +207,19 @@ data: {jsonrpc response or notification}
 - `go_build`
 - `go_vet`
 - `go_mod_tidy`
+
+当前内置 command templates：
+
+- `make_test`
+- `make_build`
+- `go_clean_testcache`
 - `go_mod_tidy`
+
+当前内置 command templates：
+
+- `make_test`
+- `make_build`
+- `go_clean_testcache`
 
 这不是 shell。客户端不能发送任意命令字符串。
 
@@ -352,6 +365,13 @@ data: {jsonrpc response or notification}
 - `-o=...` / `-coverprofile=...` 这类 inline 路径值也会再次校验，不能写到 workdir 外
 
 ---
+
+## 7.5 `exec.run_template` 使用约定
+
+- 不是任意 shell，而是引用服务端配置好的固定模板
+- 客户端只能指定 `template` 和 `workdir`
+- `workdir` 仍然必须落在 `allowed_roots` 内
+- 适合逐步放开命令执行，而不炸开安全边界
 
 ## 8. 推荐调用流程
 

@@ -186,3 +186,23 @@ exec:
       allowed_args: ["-v", "-e", "-diff", "-go", "-compat", "-x"]
       timeout_sec: 30
       read_only: false
+
+    # fixed command templates for exec.run_template
+    command_templates:
+      make_test:
+        enabled: true
+        command: ["make", "test"]
+        timeout_sec: 30
+        read_only: false
+
+      make_build:
+        enabled: true
+        command: ["make", "build"]
+        timeout_sec: 30
+        read_only: false
+
+      go_clean_testcache:
+        enabled: true
+        command: ["go", "clean", "-testcache"]
+        timeout_sec: 30
+        read_only: false

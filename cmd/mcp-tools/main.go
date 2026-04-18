@@ -102,6 +102,7 @@ func printConfigSummary(cfg config.Config) error {
 		"supported_protocols":  cfg.SupportedProtocols,
 		"git_allowed":          sortedTrueKeys(cfg.GitAllowed),
 		"exec_presets":         sortedPresetNames(cfg.ExecPresets),
+		"command_templates":    sortedTemplateNames(cfg.CommandTemplates),
 		"bearer_token_present": cfg.BearerToken != "",
 	}
 	encoded, err := json.MarshalIndent(summary, "", "  ")
@@ -136,4 +137,13 @@ func shutdownSignal() <-chan os.Signal {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	return ch
+}
+
+func sortedTemplateNames(values map[string]config.CommandTemplate) []string {
+	out := make([]string, 0, len(values))
+	for key := range values {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
 }

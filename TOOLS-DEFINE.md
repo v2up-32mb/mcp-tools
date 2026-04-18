@@ -13,6 +13,7 @@
 - `fs.*`：文件系统工具
 - `git.*`：受限 Git 子命令
 - `exec.run`：受限命令执行 preset
+- `exec.run_template`：受限固定模板命令执行
 
 统一约束：
 
@@ -443,6 +444,32 @@ git pull --ff-only
   - `stdout`
   - `stderr`
   - `argv`
+
+---
+
+## 5.1 `exec.run_template` 工具定义
+
+### 作用
+在允许目录下执行服务端配置好的固定命令模板。
+
+### 输入参数
+- `template`
+- `workdir`
+- `timeout_override_sec`（可选）
+
+### 关键步骤
+1. 读取 `template`
+2. 从配置中查找 `CommandTemplates[template]`
+3. 若不存在则拒绝
+4. 解析 `workdir` 并要求其落在 allowed roots 内
+5. 模板提供固定 argv，客户端不再额外传 args
+6. `timeout_override_sec` 只允许缩短
+7. 执行并审计
+
+### 默认模板
+- `make_test`
+- `make_build`
+- `go_clean_testcache`
 
 ---
 
