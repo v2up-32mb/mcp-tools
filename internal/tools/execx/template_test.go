@@ -61,6 +61,7 @@ func TestRunTemplateExecutesConfiguredCommand(t *testing.T) {
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"template": "gomod",
 		"workdir":  ".",
+		"confirm":  true,
 	})
 	if err != nil {
 		t.Fatalf("run_template failed: %v", err)
@@ -166,5 +167,37 @@ func TestRunTemplateRejectsWorkdirOutsideTemplateScope(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected workdir scope error")
+	}
+}
+
+func TestRunTemplateRequiresConfirmation(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		CommandTemplates: map[string]config.CommandTemplate{
+			"cleanup": {Command: []string{"pwd"}, Category: "cleanup", Destructive: true, RequiresConfirmation: true, Timeout: 5 * time.Second},
+		},
+	}
+	tool := findTool(t, cfg, "exec.run_template")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"template": "cleanup",
+		"workdir":  ".",
+	})
+	if err == nil {
+		t.Fatal("expected confirmation required error")
+	}
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"template": "cleanup",
+		"workdir":  ".",
+		"confirm":  true,
+	})
+	if err != nil {
+		t.Fatalf("expected confirmed execution to pass, got %v", err)
+	}
+	if res.StructuredContent["confirm"] != true {
+		t.Fatalf("expected confirm flag in result, got %#v", res.StructuredContent)
 	}
 }

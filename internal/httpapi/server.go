@@ -1090,7 +1090,14 @@ func (s *Server) trackTemplateCall(toolName string, args map[string]any, result 
 	if strings.TrimSpace(templateName) == "" {
 		templateName = "<unknown>"
 	}
-	s.metrics.recordTemplateCall(templateName, !result.IsError)
+	confirmationBlocked := false
+	if tpl, ok := s.cfg.CommandTemplates[templateName]; ok && tpl.RequiresConfirmation {
+		confirm, _ := args["confirm"].(bool)
+		if !confirm && result.IsError {
+			confirmationBlocked = true
+		}
+	}
+	s.metrics.recordTemplateCall(templateName, !result.IsError, confirmationBlocked)
 }
 
 func cloneStrings(values []string) []string {

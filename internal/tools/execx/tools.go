@@ -93,6 +93,7 @@ func (t templateTool) Schema() map[string]any {
 				"description": templateSummaryForSchema(t.cfg.CommandTemplates),
 			},
 			"workdir":              map[string]any{"type": "string"},
+			"confirm":              map[string]any{"type": "boolean"},
 			"timeout_override_sec": map[string]any{"type": "integer"},
 		},
 		"required":            []string{"template", "workdir"},
@@ -113,6 +114,10 @@ func (t templateTool) Call(ctx context.Context, _ mcp.CallContext, args map[stri
 	if err := validateTemplateWorkdir(t.cfg, template, resolvedWorkdir); err != nil {
 		return mcp.Result{}, err
 	}
+	confirm, _ := args["confirm"].(bool)
+	if template.RequiresConfirmation && !confirm {
+		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("template %q requires confirmation; set confirm=true to execute", templateName), mcp.AuditData{Workdir: resolvedWorkdir, Allowed: true, ResultDigest: "confirmation required"})
+	}
 	argv := cloneStrings(template.Command)
 	timeout := applyTimeoutOverride(template.Timeout, args["timeout_override_sec"])
 	extra := map[string]any{
@@ -122,6 +127,9 @@ func (t templateTool) Call(ctx context.Context, _ mcp.CallContext, args map[stri
 	}
 	if len(template.AllowedWorkdirs) > 0 {
 		extra["allowed_workdirs"] = cloneStrings(template.AllowedWorkdirs)
+	}
+	if confirm {
+		extra["confirm"] = true
 	}
 	return runExecCommand(ctx, t.cfg, templateName, "template", argv, resolvedWorkdir, rawWorkdir, timeout, template.Env, template.ReadOnly, extra)
 }

@@ -1095,8 +1095,8 @@ func TestStatezIncludesTemplateMetadataAndCounters(t *testing.T) {
 				Env:                  map[string]string{"MCP_TEMPLATE_TEST": "hello"},
 				AllowedWorkdirs:      []string{"."},
 				Category:             "build",
-				Destructive:          true,
-				RequiresConfirmation: true,
+				Destructive:          false,
+				RequiresConfirmation: false,
 				Timeout:              5 * time.Second,
 				ReadOnly:             true,
 			},
@@ -1149,7 +1149,7 @@ func TestStatezIncludesTemplateMetadataAndCounters(t *testing.T) {
 	configSection := snapshot["config"].(map[string]any)
 	templates := configSection["command_templates"].(map[string]any)
 	gomod := templates["gomod"].(map[string]any)
-	if gomod["read_only"] != true || gomod["category"] != "build" || gomod["destructive"] != true || gomod["requires_confirmation"] != true {
+	if gomod["read_only"] != true || gomod["category"] != "build" || gomod["destructive"] != false || gomod["requires_confirmation"] != false {
 		t.Fatalf("expected risk metadata on template, got %#v", gomod)
 	}
 	envKeys := gomod["env_keys"].([]any)
@@ -1157,11 +1157,81 @@ func TestStatezIncludesTemplateMetadataAndCounters(t *testing.T) {
 		t.Fatalf("unexpected env keys: %#v", envKeys)
 	}
 	metrics := snapshot["template_metrics"].(map[string]any)
-	if metrics["attempts"].(float64) < 1 || metrics["success"].(float64) < 1 {
+	if metrics["attempts"].(float64) < 1 || metrics["success"].(float64) < 1 || metrics["confirmation_blocked"].(float64) != 0 {
 		t.Fatalf("unexpected template metrics: %#v", metrics)
 	}
 	perTemplate := metrics["per_template"].(map[string]any)
 	if perTemplate["gomod"].(float64) < 1 {
 		t.Fatalf("expected per-template metrics for gomod, got %#v", perTemplate)
+	}
+}
+
+func TestStatezCountsTemplateConfirmationBlocked(t *testing.T) {
+	handler, _, _ := newTestServerWithConfig(t, func(cfg *config.Config) {
+		cfg.CommandTemplates = map[string]config.CommandTemplate{
+			"cleanup": {
+				Command:              []string{"pwd"},
+				Category:             "cleanup",
+				Destructive:          true,
+				RequiresConfirmation: true,
+				Timeout:              5 * time.Second,
+			},
+		}
+	})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	sessionID := initializeSessionHTTP(t, ts.URL)
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1001,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "exec.run_template",
+			"arguments": map[string]any{
+				"template": "cleanup",
+				"workdir":  ".",
+			},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("template request failed: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	result := decoded["result"].(map[string]any)
+	if result["isError"] != true {
+		t.Fatalf("expected tool error result, got %#v", result)
+	}
+
+	stateReq, err := http.NewRequest(http.MethodGet, ts.URL+"/debug/statez", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateReq.Header.Set("Authorization", "Bearer secret")
+	stateResp, err := http.DefaultClient.Do(stateReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stateResp.Body.Close()
+	var snapshot map[string]any
+	if err := json.NewDecoder(stateResp.Body).Decode(&snapshot); err != nil {
+		t.Fatal(err)
+	}
+	metrics := snapshot["template_metrics"].(map[string]any)
+	if metrics["confirmation_blocked"].(float64) < 1 {
+		t.Fatalf("expected confirmation_blocked >= 1, got %#v", metrics)
+	}
+	blockedPerTemplate := metrics["blocked_per_template"].(map[string]any)
+	if blockedPerTemplate["cleanup"].(float64) < 1 {
+		t.Fatalf("expected cleanup blocked counter, got %#v", blockedPerTemplate)
 	}
 }

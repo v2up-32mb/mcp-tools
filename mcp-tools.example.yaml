@@ -214,7 +214,7 @@ exec:
         command: ["go", "clean", "-testcache"]
         category: cleanup
         destructive: true
-        requires_confirmation: false
+        requires_confirmation: true
         env:
           GOFLAGS: ""
         timeout_sec: 30

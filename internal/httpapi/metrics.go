@@ -16,11 +16,13 @@ type serverMetrics struct {
 	templateAttempts             int64
 	templateSuccess              int64
 	templateFailure              int64
+	templateConfirmationBlocked  int64
 	templateCalls                map[string]int64
+	templateBlockedCalls         map[string]int64
 }
 
 func newServerMetrics() *serverMetrics {
-	return &serverMetrics{templateCalls: make(map[string]int64)}
+	return &serverMetrics{templateCalls: make(map[string]int64), templateBlockedCalls: make(map[string]int64)}
 }
 
 func (m *serverMetrics) snapshot() map[string]int64 {
@@ -34,7 +36,7 @@ func (m *serverMetrics) snapshot() map[string]int64 {
 	}
 }
 
-func (m *serverMetrics) recordTemplateCall(name string, success bool) {
+func (m *serverMetrics) recordTemplateCall(name string, success bool, confirmationBlocked bool) {
 	m.templateMu.Lock()
 	defer m.templateMu.Unlock()
 	m.templateAttempts++
@@ -43,6 +45,10 @@ func (m *serverMetrics) recordTemplateCall(name string, success bool) {
 		m.templateSuccess++
 	} else {
 		m.templateFailure++
+	}
+	if confirmationBlocked {
+		m.templateConfirmationBlocked++
+		m.templateBlockedCalls[name]++
 	}
 }
 
@@ -53,10 +59,16 @@ func (m *serverMetrics) templateSnapshot() map[string]any {
 	for k, v := range m.templateCalls {
 		perTemplate[k] = v
 	}
+	blockedPerTemplate := make(map[string]int64, len(m.templateBlockedCalls))
+	for k, v := range m.templateBlockedCalls {
+		blockedPerTemplate[k] = v
+	}
 	return map[string]any{
-		"attempts":     m.templateAttempts,
-		"success":      m.templateSuccess,
-		"failure":      m.templateFailure,
-		"per_template": perTemplate,
+		"attempts":             m.templateAttempts,
+		"success":              m.templateSuccess,
+		"failure":              m.templateFailure,
+		"confirmation_blocked": m.templateConfirmationBlocked,
+		"per_template":         perTemplate,
+		"blocked_per_template": blockedPerTemplate,
 	}
 }

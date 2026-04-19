@@ -464,15 +464,16 @@ git pull --ff-only
 4. 解析 `workdir` 并要求其落在 allowed roots 内
 5. 若模板配置了固定 `env`，则附加到子进程环境中
 6. 若模板配置了 `allowed_workdirs`，则 `workdir` 还必须命中这些范围之一
-7. 模板风险语义（`category` / `destructive` / `requires_confirmation`）会随 schema、result、statez 一起暴露
-8. 模板提供固定 argv，客户端不再额外传 args
-9. `timeout_override_sec` 只允许缩短
-10. 执行并审计
+7. 若模板 `requires_confirmation=true`，则调用方必须显式传 `confirm=true` 才允许执行
+8. 模板风险语义（`category` / `destructive` / `requires_confirmation`）会随 schema、result、statez 一起暴露
+9. 模板提供固定 argv，客户端不再额外传 args
+10. `timeout_override_sec` 只允许缩短
+11. 执行并审计
 
 ### 默认模板
 - `make_test`
 - `make_build`
-- `go_clean_testcache`
+- `go_clean_testcache`（默认 `requires_confirmation=true`）
 
 ### discoverability
 - `exec.run_template` 的 schema 中，`template` 字段会带当前模板名 `enum`

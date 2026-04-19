@@ -46,7 +46,7 @@
   - `exec.run`
 - `exec.run_template`
   - 仅开放 Go preset：`go_fmt` / `go_mod_download` / `go_test` / `go_generate` / `go_build` / `go_vet` / `go_mod_tidy`
-- 同时支持固定白名单命令模板：`make_test` / `make_build` / `go_clean_testcache`
+- 同时支持固定白名单命令模板：`make_test` / `make_build` / `go_clean_testcache`（默认要求 `confirm=true`）
 - 审计日志：JSON Lines
 - 目录边界：启动目录 + `allowed_roots`
 - 浏览器 Origin 拒绝：未配置 `allowed_origins` / `MCP_ALLOWED_ORIGINS` 时默认不接受浏览器来源请求
@@ -750,6 +750,7 @@ curl -s http://127.0.0.1:8080/mcp   -H 'Authorization: Bearer change-me'   -H "M
 - 模板本身提供固定 argv，不支持任意 shell 字符串
 - 模板可带服务端固定 `env`
 - 模板可带风险语义：`category` / `destructive` / `requires_confirmation`
+- 若模板 `requires_confirmation=true`，客户端必须显式传 `confirm=true` 才会执行
 - `timeout_override_sec` 仍然只能缩短
 
 ```bash

@@ -476,7 +476,7 @@ func defaultCommandTemplates(baseTimeout time.Duration) map[string]CommandTempla
 			Command:              []string{"go", "clean", "-testcache"},
 			Category:             "cleanup",
 			Destructive:          true,
-			RequiresConfirmation: false,
+			RequiresConfirmation: true,
 			Timeout:              baseTimeout,
 			ReadOnly:             false,
 		},

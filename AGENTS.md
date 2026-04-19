@@ -373,6 +373,7 @@ data: {jsonrpc response or notification}
 - 模板可以有服务端固定 `env`，客户端不能覆盖
 - 模板可以额外配置 `allowed_workdirs`，进一步收紧工作目录范围
 - 模板还可以声明 `category` / `destructive` / `requires_confirmation` 风险语义
+- 若模板 `requires_confirmation=true`，调用时必须显式传 `confirm=true`
 - `workdir` 仍然必须落在 `allowed_roots` 内
 - 适合逐步放开命令执行，而不炸开安全边界
 
