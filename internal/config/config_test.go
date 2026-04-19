@@ -282,4 +282,10 @@ func TestLoadDefaultCommandTemplatesPresent(t *testing.T) {
 			t.Fatalf("expected default command template %q, got %#v", name, cfg.CommandTemplates)
 		}
 	}
+	if cfg.CommandTemplates["make_test"].Category != "test" || cfg.CommandTemplates["make_test"].Destructive {
+		t.Fatalf("unexpected make_test metadata: %#v", cfg.CommandTemplates["make_test"])
+	}
+	if cfg.CommandTemplates["go_clean_testcache"].Category != "cleanup" || !cfg.CommandTemplates["go_clean_testcache"].Destructive {
+		t.Fatalf("unexpected go_clean_testcache metadata: %#v", cfg.CommandTemplates["go_clean_testcache"])
+	}
 }

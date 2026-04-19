@@ -1091,11 +1091,14 @@ func TestStatezIncludesTemplateMetadataAndCounters(t *testing.T) {
 	handler, _, _ := newTestServerWithConfig(t, func(cfg *config.Config) {
 		cfg.CommandTemplates = map[string]config.CommandTemplate{
 			"gomod": {
-				Command:         []string{"go", "env", "GOMOD"},
-				Env:             map[string]string{"MCP_TEMPLATE_TEST": "hello"},
-				AllowedWorkdirs: []string{"."},
-				Timeout:         5 * time.Second,
-				ReadOnly:        true,
+				Command:              []string{"go", "env", "GOMOD"},
+				Env:                  map[string]string{"MCP_TEMPLATE_TEST": "hello"},
+				AllowedWorkdirs:      []string{"."},
+				Category:             "build",
+				Destructive:          true,
+				RequiresConfirmation: true,
+				Timeout:              5 * time.Second,
+				ReadOnly:             true,
 			},
 		}
 	})
@@ -1146,8 +1149,8 @@ func TestStatezIncludesTemplateMetadataAndCounters(t *testing.T) {
 	configSection := snapshot["config"].(map[string]any)
 	templates := configSection["command_templates"].(map[string]any)
 	gomod := templates["gomod"].(map[string]any)
-	if gomod["read_only"] != true {
-		t.Fatalf("expected read_only template metadata, got %#v", gomod)
+	if gomod["read_only"] != true || gomod["category"] != "build" || gomod["destructive"] != true || gomod["requires_confirmation"] != true {
+		t.Fatalf("expected risk metadata on template, got %#v", gomod)
 	}
 	envKeys := gomod["env_keys"].([]any)
 	if len(envKeys) != 1 || envKeys[0].(string) != "MCP_TEMPLATE_TEST" {

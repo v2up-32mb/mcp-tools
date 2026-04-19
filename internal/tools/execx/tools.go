@@ -73,7 +73,7 @@ func (t templateTool) Description() string {
 	parts := make([]string, 0, len(names))
 	for _, name := range names {
 		tpl := t.cfg.CommandTemplates[name]
-		parts = append(parts, fmt.Sprintf("%s(read_only=%t)", name, tpl.ReadOnly))
+		parts = append(parts, fmt.Sprintf("%s(category=%s,destructive=%t,requires_confirmation=%t,read_only=%t)", name, firstNonEmpty(tpl.Category, "uncategorized"), tpl.Destructive, tpl.RequiresConfirmation, tpl.ReadOnly))
 	}
 	detail := strings.Join(parts, ", ")
 	if detail == "" {
@@ -88,13 +88,15 @@ func (t templateTool) Schema() map[string]any {
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"template": map[string]any{
-				"type": "string",
-				"enum": sortedTemplateNames(t.cfg.CommandTemplates),
+				"type":        "string",
+				"enum":        sortedTemplateNames(t.cfg.CommandTemplates),
+				"description": templateSummaryForSchema(t.cfg.CommandTemplates),
 			},
 			"workdir":              map[string]any{"type": "string"},
 			"timeout_override_sec": map[string]any{"type": "integer"},
 		},
-		"required": []string{"template", "workdir"},
+		"required":            []string{"template", "workdir"},
+		"x-template-metadata": summarizeTemplateMetadata(t.cfg.CommandTemplates),
 	}
 }
 
@@ -113,7 +115,15 @@ func (t templateTool) Call(ctx context.Context, _ mcp.CallContext, args map[stri
 	}
 	argv := cloneStrings(template.Command)
 	timeout := applyTimeoutOverride(template.Timeout, args["timeout_override_sec"])
-	return runExecCommand(ctx, t.cfg, templateName, "template", argv, resolvedWorkdir, rawWorkdir, timeout, template.Env, template.ReadOnly)
+	extra := map[string]any{
+		"category":              template.Category,
+		"destructive":           template.Destructive,
+		"requires_confirmation": template.RequiresConfirmation,
+	}
+	if len(template.AllowedWorkdirs) > 0 {
+		extra["allowed_workdirs"] = cloneStrings(template.AllowedWorkdirs)
+	}
+	return runExecCommand(ctx, t.cfg, templateName, "template", argv, resolvedWorkdir, rawWorkdir, timeout, template.Env, template.ReadOnly, extra)
 }
 
 func (t configuredTool) Call(ctx context.Context, _ mcp.CallContext, args map[string]any) (mcp.Result, error) {
@@ -139,7 +149,7 @@ func (t configuredTool) Call(ctx context.Context, _ mcp.CallContext, args map[st
 
 	timeout := applyTimeoutOverride(preset.Timeout, args["timeout_override_sec"])
 	fullArgv := append([]string{preset.Command}, argv...)
-	return runExecCommand(ctx, t.cfg, presetName, "preset", fullArgv, resolvedWorkdir, rawWorkdir, timeout, nil, preset.ReadOnly)
+	return runExecCommand(ctx, t.cfg, presetName, "preset", fullArgv, resolvedWorkdir, rawWorkdir, timeout, nil, preset.ReadOnly, nil)
 }
 
 func resolveWorkdir(cfg config.Config, args map[string]any) (string, string, error) {
@@ -174,7 +184,7 @@ func applyTimeoutOverride(timeout time.Duration, raw any) time.Duration {
 	return timeout
 }
 
-func runExecCommand(ctx context.Context, cfg config.Config, name string, mode string, argv []string, resolvedWorkdir string, rawWorkdir string, timeout time.Duration, fixedEnv map[string]string, readOnly bool) (mcp.Result, error) {
+func runExecCommand(ctx context.Context, cfg config.Config, name string, mode string, argv []string, resolvedWorkdir string, rawWorkdir string, timeout time.Duration, fixedEnv map[string]string, readOnly bool, extraStructured map[string]any) (mcp.Result, error) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
@@ -219,6 +229,9 @@ func runExecCommand(ctx context.Context, cfg config.Config, name string, mode st
 	}
 	if strings.TrimSpace(rawWorkdir) != "" {
 		structured["requested_workdir"] = rawWorkdir
+	}
+	for key, value := range extraStructured {
+		structured[key] = value
 	}
 	return mcp.TextResult(text, structured, auditData), nil
 }
@@ -271,6 +284,45 @@ func sortedEnvKeys(values map[string]string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func templateSummaryForSchema(values map[string]config.CommandTemplate) string {
+	names := sortedTemplateNames(values)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		tpl := values[name]
+		parts = append(parts, fmt.Sprintf("%s(category=%s,destructive=%t,requires_confirmation=%t,read_only=%t)", name, firstNonEmpty(tpl.Category, "uncategorized"), tpl.Destructive, tpl.RequiresConfirmation, tpl.ReadOnly))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func summarizeTemplateMetadata(values map[string]config.CommandTemplate) map[string]any {
+	out := make(map[string]any, len(values))
+	for name, tpl := range values {
+		entry := map[string]any{
+			"category":              tpl.Category,
+			"destructive":           tpl.Destructive,
+			"requires_confirmation": tpl.RequiresConfirmation,
+			"read_only":             tpl.ReadOnly,
+		}
+		if len(tpl.Env) > 0 {
+			entry["env_keys"] = sortedEnvKeys(tpl.Env)
+		}
+		if len(tpl.AllowedWorkdirs) > 0 {
+			entry["allowed_workdirs"] = cloneStrings(tpl.AllowedWorkdirs)
+		}
+		out[name] = entry
+	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func validateArgs(presetName string, preset config.ExecPreset, raw any) ([]string, error) {

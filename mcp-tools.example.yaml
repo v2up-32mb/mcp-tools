@@ -192,6 +192,9 @@ exec:
       make_test:
         enabled: true
         command: ["make", "test"]
+        category: test
+        destructive: false
+        requires_confirmation: false
         allowed_workdirs: ["."]
         timeout_sec: 30
         read_only: false
@@ -199,6 +202,9 @@ exec:
       make_build:
         enabled: true
         command: ["make", "build"]
+        category: build
+        destructive: false
+        requires_confirmation: false
         allowed_workdirs: ["."]
         timeout_sec: 30
         read_only: false
@@ -206,6 +212,9 @@ exec:
       go_clean_testcache:
         enabled: true
         command: ["go", "clean", "-testcache"]
+        category: cleanup
+        destructive: true
+        requires_confirmation: false
         env:
           GOFLAGS: ""
         timeout_sec: 30

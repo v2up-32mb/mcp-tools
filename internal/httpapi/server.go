@@ -1060,8 +1060,11 @@ func summarizeCommandTemplates(templates map[string]config.CommandTemplate) map[
 	out := make(map[string]any, len(templates))
 	for name, tpl := range templates {
 		entry := map[string]any{
-			"command":   cloneStrings(tpl.Command),
-			"read_only": tpl.ReadOnly,
+			"command":               cloneStrings(tpl.Command),
+			"category":              tpl.Category,
+			"destructive":           tpl.Destructive,
+			"requires_confirmation": tpl.RequiresConfirmation,
+			"read_only":             tpl.ReadOnly,
 		}
 		if len(tpl.Env) > 0 {
 			keys := make([]string, 0, len(tpl.Env))

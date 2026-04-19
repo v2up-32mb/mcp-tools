@@ -54,7 +54,7 @@ func TestRunTemplateExecutesConfiguredCommand(t *testing.T) {
 		OutputMaxBytes:   4096,
 		CommandTimeout:   5 * time.Second,
 		CommandTemplates: map[string]config.CommandTemplate{
-			"gomod": {Command: []string{"go", "env", "GOMOD"}, Timeout: 5 * time.Second},
+			"gomod": {Command: []string{"go", "env", "GOMOD"}, Category: "build", RequiresConfirmation: true, Timeout: 5 * time.Second},
 		},
 	}
 	tool := findTool(t, cfg, "exec.run_template")
@@ -70,6 +70,9 @@ func TestRunTemplateExecutesConfiguredCommand(t *testing.T) {
 	}
 	if len(res.Content) == 0 || res.Content[0].Text == "" {
 		t.Fatalf("expected stdout in result, got %#v", res)
+	}
+	if res.StructuredContent["category"] != "build" || res.StructuredContent["destructive"] != false || res.StructuredContent["requires_confirmation"] != true {
+		t.Fatalf("unexpected template metadata in result: %#v", res.StructuredContent)
 	}
 }
 
@@ -100,8 +103,8 @@ func TestRunTemplateTimeoutOverrideOnlyShortens(t *testing.T) {
 
 func TestRunTemplateSchemaEnumeratesConfiguredTemplates(t *testing.T) {
 	cfg := config.Config{CommandTemplates: map[string]config.CommandTemplate{
-		"make_test":  {Command: []string{"make", "test"}, Timeout: time.Second},
-		"make_build": {Command: []string{"make", "build"}, Timeout: time.Second},
+		"make_test":  {Command: []string{"make", "test"}, Category: "test", Destructive: false, RequiresConfirmation: false, Timeout: time.Second},
+		"make_build": {Command: []string{"make", "build"}, Category: "build", Destructive: true, RequiresConfirmation: true, Timeout: time.Second},
 	}}
 	tool := findTool(t, cfg, "exec.run_template")
 	schema := tool.Schema()
@@ -110,6 +113,11 @@ func TestRunTemplateSchemaEnumeratesConfiguredTemplates(t *testing.T) {
 	enum := templateProp["enum"].([]string)
 	if len(enum) != 2 || enum[0] != "make_build" || enum[1] != "make_test" {
 		t.Fatalf("unexpected template enum: %#v", enum)
+	}
+	meta := schema["x-template-metadata"].(map[string]any)
+	makeBuild := meta["make_build"].(map[string]any)
+	if makeBuild["category"] != "build" || makeBuild["destructive"] != true || makeBuild["requires_confirmation"] != true {
+		t.Fatalf("unexpected template metadata in schema: %#v", makeBuild)
 	}
 }
 

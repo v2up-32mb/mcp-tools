@@ -251,6 +251,9 @@ allowed_origins:
 - `exec.command_templates.<name>` 可声明固定 argv 的模板命令，供 `exec.run_template` 调用
 - `exec.command_templates.<name>.env` 可配置模板级固定环境变量
 - `exec.command_templates.<name>.allowed_workdirs` 可限制模板只允许在指定工作目录范围内执行
+- `exec.command_templates.<name>.category` 可声明模板类别（如 build/test/cleanup）
+- `exec.command_templates.<name>.destructive` 可标识模板是否具有破坏性副作用
+- `exec.command_templates.<name>.requires_confirmation` 可为后续确认流预留风险标记
 
 ## 启动
 
@@ -745,6 +748,8 @@ curl -s http://127.0.0.1:8080/mcp   -H 'Authorization: Bearer change-me'   -H "M
 - 只能运行服务端配置好的模板命令
 - 客户端只能传：`template`、`workdir`、`timeout_override_sec`
 - 模板本身提供固定 argv，不支持任意 shell 字符串
+- 模板可带服务端固定 `env`
+- 模板可带风险语义：`category` / `destructive` / `requires_confirmation`
 - `timeout_override_sec` 仍然只能缩短
 
 ```bash

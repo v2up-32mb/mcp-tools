@@ -66,11 +66,14 @@ type ExecPreset struct {
 }
 
 type CommandTemplate struct {
-	Command         []string
-	Env             map[string]string
-	AllowedWorkdirs []string
-	Timeout         time.Duration
-	ReadOnly        bool
+	Command              []string
+	Env                  map[string]string
+	AllowedWorkdirs      []string
+	Category             string
+	Destructive          bool
+	RequiresConfirmation bool
+	Timeout              time.Duration
+	ReadOnly             bool
 }
 
 type LoadOptions struct {
@@ -120,12 +123,15 @@ type fileExecPreset struct {
 }
 
 type fileCommandTemplate struct {
-	Enabled         *bool             `yaml:"enabled"`
-	Command         []string          `yaml:"command"`
-	Env             map[string]string `yaml:"env"`
-	AllowedWorkdirs []string          `yaml:"allowed_workdirs"`
-	TimeoutSec      *int              `yaml:"timeout_sec"`
-	ReadOnly        *bool             `yaml:"read_only"`
+	Enabled              *bool             `yaml:"enabled"`
+	Command              []string          `yaml:"command"`
+	Env                  map[string]string `yaml:"env"`
+	AllowedWorkdirs      []string          `yaml:"allowed_workdirs"`
+	Category             string            `yaml:"category"`
+	Destructive          *bool             `yaml:"destructive"`
+	RequiresConfirmation *bool             `yaml:"requires_confirmation"`
+	TimeoutSec           *int              `yaml:"timeout_sec"`
+	ReadOnly             *bool             `yaml:"read_only"`
 }
 
 func Load() (Config, error) {
@@ -451,19 +457,28 @@ func defaultExecPresets(baseTimeout time.Duration) map[string]ExecPreset {
 func defaultCommandTemplates(baseTimeout time.Duration) map[string]CommandTemplate {
 	return map[string]CommandTemplate{
 		"make_test": {
-			Command:  []string{"make", "test"},
-			Timeout:  baseTimeout,
-			ReadOnly: false,
+			Command:              []string{"make", "test"},
+			Category:             "test",
+			Destructive:          false,
+			RequiresConfirmation: false,
+			Timeout:              baseTimeout,
+			ReadOnly:             false,
 		},
 		"make_build": {
-			Command:  []string{"make", "build"},
-			Timeout:  baseTimeout,
-			ReadOnly: false,
+			Command:              []string{"make", "build"},
+			Category:             "build",
+			Destructive:          false,
+			RequiresConfirmation: false,
+			Timeout:              baseTimeout,
+			ReadOnly:             false,
 		},
 		"go_clean_testcache": {
-			Command:  []string{"go", "clean", "-testcache"},
-			Timeout:  baseTimeout,
-			ReadOnly: false,
+			Command:              []string{"go", "clean", "-testcache"},
+			Category:             "cleanup",
+			Destructive:          true,
+			RequiresConfirmation: false,
+			Timeout:              baseTimeout,
+			ReadOnly:             false,
 		},
 	}
 }
@@ -530,6 +545,15 @@ func mergeCommandTemplates(base map[string]CommandTemplate, overrides map[string
 		}
 		if override.AllowedWorkdirs != nil {
 			template.AllowedWorkdirs = cloneStrings(override.AllowedWorkdirs)
+		}
+		if strings.TrimSpace(override.Category) != "" {
+			template.Category = strings.TrimSpace(override.Category)
+		}
+		if override.Destructive != nil {
+			template.Destructive = *override.Destructive
+		}
+		if override.RequiresConfirmation != nil {
+			template.RequiresConfirmation = *override.RequiresConfirmation
 		}
 		if override.TimeoutSec != nil {
 			template.Timeout = time.Duration(*override.TimeoutSec) * time.Second
