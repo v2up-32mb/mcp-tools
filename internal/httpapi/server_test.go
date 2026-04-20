@@ -421,6 +421,123 @@ func TestEditLinesAndAudit(t *testing.T) {
 	}
 }
 
+func TestApplyUnifiedDiffAndAudit(t *testing.T) {
+	handler, dir, auditPath := newTestServer(t)
+	sessionID := initializeSession(t, handler)
+	target := filepath.Join(dir, "apply.txt")
+	if err := os.WriteFile(target, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	diff := strings.Join([]string{
+		"--- a/apply.txt",
+		"+++ b/apply.txt",
+		"@@ -1,3 +1,3 @@",
+		" one",
+		"-two",
+		"+TWO",
+		" three",
+		"",
+	}, "\n")
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      301,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "fs.apply_unified_diff",
+			"arguments": map[string]any{
+				"path": "apply.txt",
+				"diff": diff,
+			},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "one\nTWO\nthree\n" {
+		t.Fatalf("unexpected file contents: %q", string(got))
+	}
+
+	auditPayload, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(auditPayload, []byte("fs.apply_unified_diff")) {
+		t.Fatalf("missing audit entry: %s", auditPayload)
+	}
+}
+
+func TestApplyUnifiedDiffReturnsStructuredConflictResult(t *testing.T) {
+	handler, dir, _ := newTestServer(t)
+	sessionID := initializeSession(t, handler)
+	target := filepath.Join(dir, "apply-conflict.txt")
+	if err := os.WriteFile(target, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	diff := strings.Join([]string{
+		"--- a/apply-conflict.txt",
+		"+++ b/apply-conflict.txt",
+		"@@ -1,3 +1,3 @@",
+		" one",
+		"-TWO",
+		"+two2",
+		" three",
+		"",
+	}, "\n")
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      302,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "fs.apply_unified_diff",
+			"arguments": map[string]any{
+				"path": "apply-conflict.txt",
+				"diff": diff,
+			},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	result := decoded["result"].(map[string]any)
+	if result["isError"] != true {
+		t.Fatalf("expected tool error result, got %#v", result)
+	}
+	structured := result["structuredContent"].(map[string]any)
+	if structured["reason"] != "delete_mismatch" {
+		t.Fatalf("unexpected structured conflict: %#v", structured)
+	}
+	if structured["hunk_index"].(float64) != 1 {
+		t.Fatalf("expected hunk_index=1, got %#v", structured)
+	}
+	if _, ok := structured["expected_lines"]; !ok {
+		t.Fatalf("expected structured expected_lines, got %#v", structured)
+	}
+}
+
 func TestResourcesListAfterInitialize(t *testing.T) {
 	handler, _, _ := newTestServer(t)
 	sessionID := initializeSession(t, handler)

@@ -3,6 +3,7 @@ package fs
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -311,5 +312,182 @@ func TestReplaceTextRejectsExpectedReplacementMismatch(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "expected_replacements mismatch") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestApplyUnifiedDiffSupportsMultipleHunks(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.apply_unified_diff")
+	target := filepath.Join(cfg.StartupDirectory, "multi.diff.txt")
+	if err := os.WriteFile(target, []byte("alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	diff := strings.Join([]string{
+		"--- a/multi.diff.txt",
+		"+++ b/multi.diff.txt",
+		"@@ -1,3 +1,3 @@",
+		" alpha",
+		"-beta",
+		"+beta2",
+		" gamma",
+		"@@ -5,3 +5,4 @@",
+		" epsilon",
+		"-zeta",
+		"+zeta2",
+		" eta",
+		"+theta",
+		"",
+	}, "\n")
+
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path": "multi.diff.txt",
+		"diff": diff,
+	})
+	if err != nil {
+		t.Fatalf("apply_unified_diff failed: %v", err)
+	}
+	if got := res.StructuredContent["hunks_applied"]; got != 2 {
+		t.Fatalf("expected 2 hunks_applied, got %#v", got)
+	}
+	if got := res.StructuredContent["dry_run"]; got != false {
+		t.Fatalf("expected dry_run=false, got %#v", got)
+	}
+
+	payload, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "alpha\nbeta2\ngamma\ndelta\nepsilon\nzeta2\neta\ntheta\n"
+	if string(payload) != want {
+		t.Fatalf("unexpected file contents\nwant: %q\ngot:  %q", want, string(payload))
+	}
+}
+
+func TestApplyUnifiedDiffDryRunLeavesFileUnchanged(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.apply_unified_diff")
+	target := filepath.Join(cfg.StartupDirectory, "dry-run.txt")
+	original := "one\ntwo\nthree\n"
+	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	diff := strings.Join([]string{
+		"--- a/dry-run.txt",
+		"+++ b/dry-run.txt",
+		"@@ -1,3 +1,3 @@",
+		" one",
+		"-two",
+		"+TWO",
+		" three",
+		"",
+	}, "\n")
+
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":    "dry-run.txt",
+		"diff":    diff,
+		"dry_run": true,
+	})
+	if err != nil {
+		t.Fatalf("apply_unified_diff dry_run failed: %v", err)
+	}
+	if got := res.StructuredContent["dry_run"]; got != true {
+		t.Fatalf("expected dry_run=true, got %#v", got)
+	}
+	if got := res.StructuredContent["bytes_written"]; got != 0 {
+		t.Fatalf("expected bytes_written=0 for dry_run, got %#v", got)
+	}
+
+	payload, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(payload) != original {
+		t.Fatalf("dry_run should not modify file\nwant: %q\ngot:  %q", original, string(payload))
+	}
+}
+
+func TestApplyUnifiedDiffReturnsStructuredConflict(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.apply_unified_diff")
+	target := filepath.Join(cfg.StartupDirectory, "conflict.txt")
+	original := "one\ntwo\nthree\n"
+	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	diff := strings.Join([]string{
+		"--- a/conflict.txt",
+		"+++ b/conflict.txt",
+		"@@ -1,3 +1,3 @@",
+		" one",
+		"-TWO",
+		"+two2",
+		" three",
+		"",
+	}, "\n")
+
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path": "conflict.txt",
+		"diff": diff,
+	})
+	if err == nil {
+		t.Fatal("expected conflict error")
+	}
+	var toolErr *mcp.ToolError
+	if !errors.As(err, &toolErr) {
+		t.Fatalf("expected ToolError, got %T", err)
+	}
+	if toolErr.StructuredContent["reason"] != "delete_mismatch" {
+		t.Fatalf("unexpected conflict reason: %#v", toolErr.StructuredContent)
+	}
+	if toolErr.StructuredContent["hunk_index"] != 1 {
+		t.Fatalf("expected hunk_index=1, got %#v", toolErr.StructuredContent)
+	}
+	if _, ok := toolErr.StructuredContent["expected_lines"]; !ok {
+		t.Fatalf("expected structured expected_lines, got %#v", toolErr.StructuredContent)
+	}
+	payload, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(payload) != original {
+		t.Fatalf("file should remain unchanged\nwant: %q\ngot:  %q", original, string(payload))
+	}
+}
+
+func TestApplyUnifiedDiffSupportsNoNewlineMarker(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.apply_unified_diff")
+	target := filepath.Join(cfg.StartupDirectory, "no-eol.txt")
+	if err := os.WriteFile(target, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	diff := strings.Join([]string{
+		"--- a/no-eol.txt",
+		"+++ b/no-eol.txt",
+		"@@ -1 +1 @@",
+		"-old",
+		"\\ No newline at end of file",
+		"+new",
+		"\\ No newline at end of file",
+		"",
+	}, "\n")
+
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path": "no-eol.txt",
+		"diff": diff,
+	})
+	if err != nil {
+		t.Fatalf("apply_unified_diff failed: %v", err)
+	}
+	payload, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(payload) != "new" {
+		t.Fatalf("unexpected file contents: %q", string(payload))
 	}
 }

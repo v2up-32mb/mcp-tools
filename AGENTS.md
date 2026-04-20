@@ -173,6 +173,7 @@ data: {jsonrpc response or notification}
 - `fs.delete_path`
 - `fs.search_text`
 - `fs.replace_text`
+- `fs.apply_unified_diff`
 - `fs.edit_lines`
 
 ### 5.2 Git 工具
@@ -214,12 +215,6 @@ data: {jsonrpc response or notification}
 - `make_build`
 - `go_clean_testcache`
 - `go_mod_tidy`
-
-当前内置 command templates：
-
-- `make_test`
-- `make_build`
-- `go_clean_testcache`
 
 这不是 shell。客户端不能发送任意命令字符串。
 
@@ -266,6 +261,7 @@ data: {jsonrpc response or notification}
 
 - `fs.write_file`
 - `fs.replace_text`
+- `fs.apply_unified_diff`
 - `fs.edit_lines`
 - `fs.make_dir`
 - `fs.move_path`
@@ -300,7 +296,37 @@ data: {jsonrpc response or notification}
 
 ---
 
-## 7. `fs.edit_lines` 使用约定（重要）
+## 7. `fs.apply_unified_diff` 使用约定（重要）
+
+这是当前推荐给 AI 代理处理**复杂多处修改**的主力工具。
+
+### 当前语义
+
+- 输入是**标准 unified diff 文本**
+- `path` 单独传参，diff header 只做一致性校验
+- 第一版只支持**单文件**，但支持**多个 hunk**
+- 所有 hunk **严格命中**；任一 hunk 对不上就整体失败
+- 失败会返回**结构化冲突详情**，而不是模糊字符串
+- `dry_run=true` 时只验证 patch，不写盘
+
+### 推荐做法
+
+1. 先 `fs.read_file` 理解目标文件
+2. 复杂修改优先生成 unified diff，再调用 `fs.apply_unified_diff`
+3. 若返回结构化冲突，重新 `fs.read_file` 后再重生 patch
+4. 成功后再 `fs.read_file` 或 `exec.run` 验证
+
+### 什么时候不用 `fs.apply_unified_diff`
+
+以下场景通常更适合别的工具：
+
+- 单点小改：用 `fs.edit_lines`
+- 精确旧文本替换：用 `fs.replace_text`
+- 整文件重写：用 `fs.write_file`
+
+---
+
+## 7.1 `fs.edit_lines` 使用约定（重要）
 
 这是最推荐给 AI 代理使用的低上下文编辑工具。
 
@@ -310,8 +336,7 @@ data: {jsonrpc response or notification}
 - `new_text` 按**逻辑行**解释
 - 服务端会按**严格行替换**执行，不再把后续内容黏连到替换片段后面
 - `new_text` 中的**中间空行会保留**，不会被自动忽略
-- `new_text == ""` 表示删除目标区间；`new_text == "
-"` 表示替换成 1 个空行
+- `new_text == ""` 表示删除目标区间；`new_text == "\n"` 表示替换成 1 个空行
 - 调用方仍应**显式控制自己想要的换行结构**
 
 ### 推荐做法
@@ -331,14 +356,14 @@ data: {jsonrpc response or notification}
 
 ---
 
-## 7.1 `fs.replace_text` 使用约定
+## 7.2 `fs.replace_text` 使用约定
 
 - 按精确旧文本替换新文本
 - 默认只替换第一处命中
 - `replace_all=true` 时替换所有命中
 - `expected_replacements` 可用于命中数保护
 
-## 7.2 `fs.search_text` 使用约定
+## 7.3 `fs.search_text` 使用约定
 
 - 当前是**子串匹配**，不是正则
 - `path` 可以是文件或目录
@@ -346,14 +371,14 @@ data: {jsonrpc response or notification}
 - 默认 `limit=200`，上限 `1000`
 - 现在已支持超长单行文件
 
-## 7.3 `git.*` 使用约定
+## 7.4 `git.*` 使用约定
 
 - 不传 `repo_path` 时，默认以服务启动目录作为仓库入口
 - `repo_path` 和真实仓库根都必须落在 `allowed_roots` 内
 - `git.add` / `git.restore` / `git.diff` 的 `paths` 必须是 repo-relative
 - `git.pull` 固定为 `--ff-only`
 
-## 7.4 `exec.run` 使用约定
+## 7.5 `exec.run` 使用约定
 
 - 不是 shell，只能运行预定义 preset
 - `workdir` 必填，且必须落在 `allowed_roots` 内
@@ -366,7 +391,7 @@ data: {jsonrpc response or notification}
 
 ---
 
-## 7.5 `exec.run_template` 使用约定
+## 7.6 `exec.run_template` 使用约定
 
 - 不是任意 shell，而是引用服务端配置好的固定模板
 - 客户端只能指定 `template` 和 `workdir`
@@ -385,7 +410,7 @@ data: {jsonrpc response or notification}
 2. `notifications/initialized`
 3. `tools/list` 或直接进入文件工具
 4. `fs.read_file`
-5. `fs.edit_lines` / `fs.write_file`
+5. `fs.apply_unified_diff` / `fs.edit_lines` / `fs.write_file`
 6. `fs.read_file` 验证
 7. 如需要，再 `exec.run` / `git.*`
 8. 完成后可 `DELETE /mcp`
@@ -393,7 +418,7 @@ data: {jsonrpc response or notification}
 ### 代码任务（Go）
 
 1. 读取目标文件
-2. 最小改动优先使用 `fs.edit_lines`
+2. 复杂修改优先使用 `fs.apply_unified_diff`，小改动优先使用 `fs.edit_lines`
 3. `exec.run(go_fmt)`
 4. `exec.run(go_test)`
 5. 若需要，再 `git.status` / `git.diff`
@@ -413,5 +438,6 @@ data: {jsonrpc response or notification}
 - 工具参数 schema
 - 路径/仓库/workdir 校验规则
 - 资源通知触发条件
+- `fs.apply_unified_diff` patch 语义与严格命中规则
 - `fs.edit_lines` 行编辑语义
 - git / exec 白名单

@@ -1098,6 +1098,121 @@ func TestSSESubscribedResourceReceivesUpdatedNotification(t *testing.T) {
 	}
 }
 
+func TestSSESubscribedResourceReceivesUpdatedNotificationFromUnifiedDiff(t *testing.T) {
+	handler, dir, _ := newTestServer(t)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	sessionID := initializeSessionHTTP(t, ts.URL)
+	events, errs, cancel := startRawSSEStream(t, ts.URL, sessionID)
+	defer cancel()
+
+	target := filepath.Join(dir, "watched-diff.txt")
+	if err := os.WriteFile(target, []byte("old\nvalue\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	subscribePayload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      220,
+		"method":  "resources/subscribe",
+		"params": map[string]any{
+			"uri": "file://" + target,
+		},
+	}
+	body, _ := json.Marshal(subscribePayload)
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/mcp", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected 202 subscribe async, got %d", resp.StatusCode)
+	}
+	select {
+	case evt := <-events:
+		if evt["id"].(float64) != 220 {
+			t.Fatalf("unexpected subscribe response: %#v", evt)
+		}
+	case err := <-errs:
+		t.Fatalf("stream read failed after subscribe: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for subscribe response")
+	}
+
+	diff := strings.Join([]string{
+		"--- a/watched-diff.txt",
+		"+++ b/watched-diff.txt",
+		"@@ -1,2 +1,2 @@",
+		"-old",
+		"+new",
+		" value",
+		"",
+	}, "\n")
+	applyPayload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      221,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "fs.apply_unified_diff",
+			"arguments": map[string]any{
+				"path": "watched-diff.txt",
+				"diff": diff,
+			},
+		},
+	}
+	body, _ = json.Marshal(applyPayload)
+	req, err = http.NewRequest(http.MethodPost, ts.URL+"/mcp", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected 202 apply async, got %d", resp.StatusCode)
+	}
+
+	gotResponse := false
+	gotNotification := false
+	timeout := time.After(3 * time.Second)
+	for !(gotResponse && gotNotification) {
+		select {
+		case evt := <-events:
+			if method, _ := evt["method"].(string); method == "notifications/resources/updated" {
+				params := evt["params"].(map[string]any)
+				if params["uri"] != "file://"+target {
+					t.Fatalf("unexpected notification params: %#v", evt)
+				}
+				gotNotification = true
+				continue
+			}
+			if id, ok := evt["id"].(float64); ok && int(id) == 221 {
+				gotResponse = true
+				continue
+			}
+		case err := <-errs:
+			t.Fatalf("stream read failed: %v", err)
+		case <-timeout:
+			t.Fatalf("timed out waiting for response+notification, response=%v notification=%v", gotResponse, gotNotification)
+		}
+	}
+}
+
 func TestSSESubscribedDirectoryReceivesChildUpdateNotification(t *testing.T) {
 	handler, dir, _ := newTestServer(t)
 	ts := httptest.NewServer(handler)

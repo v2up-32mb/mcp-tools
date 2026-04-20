@@ -43,6 +43,7 @@ func NewTools(cfg config.Config) []mcp.Tool {
 		tool{name: "fs.delete_path", desc: "Delete a file or an empty directory. This is not recursive delete; non-empty directories will fail.", schema: schemaPath(), call: deletePath(cfg)},
 		tool{name: "fs.search_text", desc: "Search by plain substring in one file or recursively under a directory. Default limit is 200, max 1000, and long lines are supported.", schema: schemaSearch(), readOnly: true, call: searchText(cfg)},
 		tool{name: "fs.replace_text", desc: "Replace exact old_text with new_text in one file. Supports replace-first or replace-all and can assert expected_replacements before writing.", schema: schemaReplaceText(), call: replaceText(cfg)},
+		tool{name: "fs.apply_unified_diff", desc: "Apply a standard unified diff to exactly one file using strict matching. path is passed separately, the diff header must match it, multiple hunks are allowed, dry_run validates without writing, and any hunk mismatch fails the whole patch with structured conflict details.", schema: schemaApplyUnifiedDiff(), call: applyUnifiedDiff(cfg)},
 		tool{name: "fs.edit_lines", desc: "Strictly replace a 1-based line range. new_text is interpreted as logical lines; blank lines are preserved, empty string deletes the range, and \"\n\" inserts one blank line. expected_old_text can be used as an optimistic concurrency check.", schema: schemaEditLines(), call: editLines(cfg)},
 	}
 }

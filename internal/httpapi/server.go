@@ -800,11 +800,11 @@ func (s *Server) listPrompts() []map[string]any {
 		{
 			"name":        "safe_file_edit",
 			"title":       "Safe File Edit",
-			"description": "Plan a scoped file edit using fs.read_file, fs.edit_lines, and validation steps.",
+			"description": "Plan a scoped file edit using fs.read_file plus fs.apply_unified_diff for complex edits or fs.edit_lines for small changes.",
 			"arguments": []map[string]any{
 				promptArgument("task", "The edit objective.", true),
 				promptArgument("path", "Target file path inside allowed roots.", true),
-				promptArgument("expected_old_text", "Optional old text for optimistic concurrency during fs.edit_lines.", false),
+				promptArgument("expected_old_text", "Optional old text for optimistic concurrency during fs.apply_unified_diff or fs.edit_lines.", false),
 			},
 			"_meta": map[string]any{
 				"inputSchema": map[string]any{
@@ -823,7 +823,7 @@ func (s *Server) listPrompts() []map[string]any {
 						},
 						"expected_old_text": map[string]any{
 							"type":        "string",
-							"description": "Optional old text for optimistic concurrency during fs.edit_lines.",
+							"description": "Optional old text for optimistic concurrency during fs.apply_unified_diff or fs.edit_lines.",
 							"examples":    []string{"# old heading"},
 						},
 					},
@@ -886,9 +886,9 @@ func (s *Server) getPrompt(name string, args map[string]any) (map[string]any, er
 		if strings.TrimSpace(task) == "" || strings.TrimSpace(path) == "" {
 			return nil, errors.New("safe_file_edit requires task and path")
 		}
-		text := fmt.Sprintf("Edit %s for task %q. First inspect with fs.read_file, then make minimal changes with fs.edit_lines, then verify with fs.read_file or exec.run if relevant. Keep the target inside allowed roots.", path, task)
+		text := fmt.Sprintf("Edit %s for task %q. First inspect with fs.read_file, then use fs.apply_unified_diff for complex or multi-hunk edits (or fs.edit_lines for small scoped changes), then verify with fs.read_file or exec.run if relevant. Keep the target inside allowed roots.", path, task)
 		if strings.TrimSpace(expectedOldText) != "" {
-			text += fmt.Sprintf(" Use expected_old_text=%q when calling fs.edit_lines if the old text must match exactly.", expectedOldText)
+			text += fmt.Sprintf(" Use expected_old_text=%q when calling fs.apply_unified_diff or fs.edit_lines if the old text must match exactly.", expectedOldText)
 		}
 		return map[string]any{
 			"description": "Guide an agent through a safe scoped file edit.",
@@ -914,7 +914,7 @@ func (s *Server) getPrompt(name string, args map[string]any) (map[string]any, er
 		if !runVetOK {
 			runVet = true
 		}
-		text := fmt.Sprintf("Work in %s to achieve %q. Inspect relevant files, edit with fs.edit_lines or fs.write_file, then run exec.run with go_fmt and go_test (target %s) as needed.", workdir, goal, testTarget)
+		text := fmt.Sprintf("Work in %s to achieve %q. Inspect relevant files, use fs.apply_unified_diff for complex edits (or fs.edit_lines / fs.write_file when simpler), then run exec.run with go_fmt and go_test (target %s) as needed.", workdir, goal, testTarget)
 		if runVet {
 			text += " Include go_vet before concluding."
 		}
@@ -998,7 +998,7 @@ func (s *Server) maybeNotifyResourceUpdated(toolName string, args map[string]any
 	}
 	var uris []string
 	switch toolName {
-	case "fs.write_file", "fs.replace_text", "fs.edit_lines", "fs.make_dir", "fs.delete_path":
+	case "fs.write_file", "fs.replace_text", "fs.apply_unified_diff", "fs.edit_lines", "fs.make_dir", "fs.delete_path":
 		if path, _ := args["path"].(string); strings.TrimSpace(path) != "" {
 			if resolved, err := security.ResolvePath(resolveAgainstStartup(path, s.cfg.StartupDirectory), s.cfg.AllowedRoots); err == nil {
 				uris = append(uris, resourceUpdateTargets(resolved, s.cfg.AllowedRoots)...)

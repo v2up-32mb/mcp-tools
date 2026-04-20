@@ -242,7 +242,51 @@
 
 ---
 
-## 3.10 `fs.edit_lines`
+## 3.10 `fs.apply_unified_diff`
+
+### 作用
+对单个文件应用**标准 unified diff**，用于复杂多处修改。
+
+### 输入参数
+- `path`
+- `diff`
+- `expected_old_text`（可选）
+- `dry_run`（可选）
+- `context_lines`（可选）
+
+### 关键步骤
+1. 解析 `path`
+2. 解析 `diff` 为 unified diff 结构
+3. 要求只包含**单文件** patch
+4. 校验 `--- / +++` header 与 `path` 一致（支持常见 `a/` / `b/` 前缀）
+5. 读取当前文件快照
+6. 若提供 `expected_old_text`，先做整文件前置校验
+7. 在内存中逐个 hunk 做**严格命中**校验与模拟应用
+8. 任一 hunk 失败则整体失败，不落盘
+9. 全部 hunk 通过后，若 `dry_run=false`，执行 `atomicWrite`
+10. 返回摘要、受影响范围、digest 与 context snippet
+
+### 严格命中规则
+- 第一版不做 fuzz 匹配
+- context 行必须逐行完全匹配
+- delete 行必须逐行完全匹配
+- 任一 hunk 不匹配则整体失败
+
+### 错误模型
+失败返回结构化冲突详情，常见 `reason` 包括：
+- `path_header_mismatch`
+- `multi_file_diff_not_supported`
+- `header_mismatch`
+- `context_mismatch`
+- `delete_mismatch`
+- `expected_old_text_mismatch`
+
+### 副作用
+- 成功后会发送 `resources/updated`
+
+---
+
+## 3.11 `fs.edit_lines`
 
 ### 作用
 按 **1-based 行区间** 做严格行替换，减少上下文传输成本。
@@ -283,8 +327,7 @@
 - `new_text` 按逻辑行解释
 - `new_text` 中的**中间空行会保留**，不会被自动忽略
 - `new_text == ""` 表示删除目标区间
-- `new_text == "
-"` 表示替换成 1 个空行
+- `new_text == "\n"` 表示替换成 1 个空行
 - 调用方仍需显式控制自己想替换成几行
 - 但即使忘记在 `new_text` 末尾补换行，也不会再把后续内容黏上去
 
@@ -526,7 +569,7 @@ event: message
 
 ## 7. 后续维护时最容易改坏的点
 
-1. **`fs.edit_lines` 的行语义**
+1. **`fs.apply_unified_diff` 的 patch 语义**
    - 不要再退回到按原样拼接 replacement 文本，否则会重新引入行黏连问题
 
 2. **mixed Accept 的分流逻辑**

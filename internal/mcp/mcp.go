@@ -52,8 +52,9 @@ type Result struct {
 }
 
 type ToolError struct {
-	Err   error
-	Audit AuditData
+	Err               error
+	Audit             AuditData
+	StructuredContent map[string]any
 }
 
 func (e *ToolError) Error() string {
@@ -147,7 +148,7 @@ func (r *Registry) Call(ctx context.Context, callCtx CallContext, name string, a
 		event.Error = toolErr.Error()
 		event.ResultDigest = toolErr.Audit.ResultDigest
 		_ = r.auditor.Write(event)
-		return ErrorResult(toolErr.Error(), toolErr.Audit), nil
+		return ErrorResultWithStructured(toolErr.Error(), toolErr.StructuredContent, toolErr.Audit), nil
 	}
 
 	event.Success = true
@@ -171,22 +172,32 @@ func TextResult(text string, structured map[string]any, auditData AuditData) Res
 }
 
 func ErrorResult(message string, auditData AuditData) Result {
+	return ErrorResultWithStructured(message, nil, auditData)
+}
+
+func ErrorResultWithStructured(message string, structured map[string]any, auditData AuditData) Result {
 	auditData.ResultDigest = firstNonEmpty(auditData.ResultDigest, "error")
+	merged := map[string]any{"error": message}
+	for key, value := range structured {
+		merged[key] = value
+	}
 	return Result{
-		Content: []TextContent{{Type: "text", Text: message}},
-		StructuredContent: map[string]any{
-			"error": message,
-		},
-		IsError: true,
-		Audit:   auditData,
+		Content:           []TextContent{{Type: "text", Text: message}},
+		StructuredContent: merged,
+		IsError:           true,
+		Audit:             auditData,
 	}
 }
 
 func WrapToolError(err error, auditData AuditData) error {
+	return WrapToolErrorWithStructured(err, auditData, nil)
+}
+
+func WrapToolErrorWithStructured(err error, auditData AuditData, structured map[string]any) error {
 	if err == nil {
 		return nil
 	}
-	return &ToolError{Err: err, Audit: auditData}
+	return &ToolError{Err: err, Audit: auditData, StructuredContent: structured}
 }
 
 func normalizeResult(result Result) Result {

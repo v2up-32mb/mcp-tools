@@ -31,6 +31,8 @@
   - `fs.move_path`
   - `fs.delete_path`
   - `fs.search_text`
+  - `fs.replace_text`
+  - `fs.apply_unified_diff`
   - `fs.edit_lines`
 - **Git 工具**
   - `git.status`
@@ -547,7 +549,7 @@ curl -s http://127.0.0.1:8080/mcp \
   -d '{"jsonrpc":"2.0","id":71,"method":"resources/subscribe","params":{"uri":"file:///your/allowed/root/README.md"}}'
 ```
 
-订阅后，如果该资源被 `fs.write_file` / `fs.replace_text` / `fs.edit_lines` / `fs.move_path` / `fs.delete_path` / `fs.make_dir` 等工具修改，对应 session 的 SSE stream 会收到：
+订阅后，如果该资源被 `fs.write_file` / `fs.replace_text` / `fs.apply_unified_diff` / `fs.edit_lines` / `fs.move_path` / `fs.delete_path` / `fs.make_dir` 等工具修改，对应 session 的 SSE stream 会收到：
 
 ```text
 event: message
@@ -611,7 +613,43 @@ curl -s http://127.0.0.1:8080/mcp \
 - `go_dev_loop.test_target`
 - `resources/templates/list` 返回的 `file://.../{path}` 模板参数 `path`
 
-### 11. fs.edit_lines
+### 11. fs.apply_unified_diff
+
+`fs.apply_unified_diff` 是当前推荐用于**复杂多处修改**的文件编辑原语：
+
+- 输入是**标准 unified diff 文本**
+- 目标文件 `path` 单独传参，diff header 只做一致性校验
+- 第一版只支持**单文件**，但支持**多个 hunk**
+- 应用策略是**严格命中**：任一 hunk 对不上就整体失败
+- 失败时会返回**结构化冲突详情**，方便 agent 重新读文件并重生 patch
+- `dry_run=true` 时只验证 patch，不写盘
+
+适合场景：
+
+- 一个文件里有多处修改
+- 修改涉及上下文校验
+- 想避免按行编辑导致的区间漂移
+
+```bash
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer change-me' \
+  -H "Mcp-Session-Id: ${SESSION_ID}" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "tools/call",
+    "params": {
+      "name": "fs.apply_unified_diff",
+      "arguments": {
+        "path": "README.md",
+        "diff": "--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-# old\n+# new\n"
+      }
+    }
+  }'
+```
+
+### 11.1 fs.edit_lines
 
 `fs.edit_lines` 现在按**严格行语义**工作：
 
@@ -619,8 +657,7 @@ curl -s http://127.0.0.1:8080/mcp \
 - `new_text` 会按“逻辑行”解释，不会与后续内容黏连
 - `new_text` 中的**中间空行会保留**，不会被自动忽略
 - `new_text == ""` 表示“不插入任何行”，也就是删除替换区间
-- `new_text == "
-"` 表示插入 **1 个空行**
+- `new_text == "\n"` 表示插入 **1 个空行**
 - 调用方仍应**显式控制自己想要的换行结构**，例如想替换成两行就传两行文本
 
 ```bash
@@ -644,7 +681,7 @@ curl -s http://127.0.0.1:8080/mcp \
   }'
 ```
 
-### 11.1 fs.search_text
+### 11.2 fs.search_text
 
 `fs.search_text` 的使用细节：
 
@@ -654,7 +691,7 @@ curl -s http://127.0.0.1:8080/mcp \
 - 默认 `limit=200`，最大支持到 `1000`
 - 现在已支持**超长单行**文件，不会因为默认 `bufio.Scanner` 的 64KiB 限制直接失败
 
-### 11.2 git.* 通用约束
+### 11.3 git.* 通用约束
 
 `git.*` 工具有几条共同规则：
 
@@ -664,7 +701,7 @@ curl -s http://127.0.0.1:8080/mcp \
 - 不允许绝对路径，不允许 `..` 越界，不允许把路径伪装成选项
 - `git.pull` 固定是 `git pull --ff-only`
 
-### 11.2 fs.replace_text
+### 11.4 fs.replace_text
 
 `fs.replace_text` 的使用细节：
 
