@@ -289,3 +289,33 @@ func TestLoadDefaultCommandTemplatesPresent(t *testing.T) {
 		t.Fatalf("unexpected go_clean_testcache metadata: %#v", cfg.CommandTemplates["go_clean_testcache"])
 	}
 }
+
+func TestLoadDefaultExecPresetsIncludeManagedGoCacheEnv(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	setTestHomeDir(t, home)
+	t.Setenv("MCP_BEARER_TOKEN", "env-token")
+
+	cfg, err := LoadWithOptions(LoadOptions{WorkDir: root})
+	if err != nil {
+		t.Fatalf("LoadWithOptions error: %v", err)
+	}
+
+	for _, name := range []string{"go_get", "go_list", "go_work_sync"} {
+		if _, ok := cfg.ExecPresets[name]; !ok {
+			t.Fatalf("expected default exec preset %q, got %#v", name, cfg.ExecPresets)
+		}
+	}
+
+	goGet := cfg.ExecPresets["go_get"]
+	wantCacheRoot := filepath.Join(home, ".mcp-tools", "cache")
+	if got := goGet.Env["GOCACHE"]; got != filepath.Join(wantCacheRoot, "go-build") {
+		t.Fatalf("unexpected GOCACHE: %q", got)
+	}
+	if got := goGet.Env["GOMODCACHE"]; got != filepath.Join(wantCacheRoot, "gomod") {
+		t.Fatalf("unexpected GOMODCACHE: %q", got)
+	}
+	if got := goGet.Env["GOTMPDIR"]; got != filepath.Join(wantCacheRoot, "tmp") {
+		t.Fatalf("unexpected GOTMPDIR: %q", got)
+	}
+}

@@ -40,6 +40,7 @@ type AuditData struct {
 	Allowed      bool
 	Stdout       string
 	Stderr       string
+	EnvKeys      []string
 	ExitCode     *int
 	ResultDigest string
 }
@@ -144,6 +145,7 @@ func (r *Registry) Call(ctx context.Context, callCtx CallContext, name string, a
 		event.Workdir = toolErr.Audit.Workdir
 		event.Stdout = toolErr.Audit.Stdout
 		event.Stderr = toolErr.Audit.Stderr
+		event.EnvKeys = cloneStrings(toolErr.Audit.EnvKeys)
 		event.ExitCode = toolErr.Audit.ExitCode
 		event.Error = toolErr.Error()
 		event.ResultDigest = toolErr.Audit.ResultDigest
@@ -157,6 +159,7 @@ func (r *Registry) Call(ctx context.Context, callCtx CallContext, name string, a
 	event.Workdir = result.Audit.Workdir
 	event.Stdout = result.Audit.Stdout
 	event.Stderr = result.Audit.Stderr
+	event.EnvKeys = cloneStrings(result.Audit.EnvKeys)
 	event.ExitCode = result.Audit.ExitCode
 	event.ResultDigest = result.Audit.ResultDigest
 	_ = r.auditor.Write(event)
@@ -251,4 +254,13 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func cloneStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	out := make([]string, len(values))
+	copy(out, values)
+	return out
 }

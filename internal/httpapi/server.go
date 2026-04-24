@@ -1042,6 +1042,7 @@ func (s *Server) stateSnapshot() map[string]any {
 			"max_request_bytes":  s.cfg.MaxRequestBytes,
 			"command_timeout_ms": s.cfg.CommandTimeout.Milliseconds(),
 			"session_ttl_ms":     s.cfg.SessionTTL.Milliseconds(),
+			"exec_presets":       summarizeExecPresets(s.cfg.ExecPresets),
 			"command_templates":  summarizeCommandTemplates(s.cfg.CommandTemplates),
 		},
 		"runtime": map[string]any{
@@ -1054,6 +1055,29 @@ func (s *Server) stateSnapshot() map[string]any {
 		"counters":         s.metrics.snapshot(),
 		"template_metrics": s.metrics.templateSnapshot(),
 	}
+}
+
+func summarizeExecPresets(presets map[string]config.ExecPreset) map[string]any {
+	out := make(map[string]any, len(presets))
+	for name, preset := range presets {
+		entry := map[string]any{
+			"command":      preset.Command,
+			"fixed_args":   cloneStrings(preset.FixedArgs),
+			"allowed_args": cloneStrings(preset.AllowedArgs),
+			"read_only":    preset.ReadOnly,
+			"timeout_ms":   preset.Timeout.Milliseconds(),
+		}
+		if len(preset.Env) > 0 {
+			keys := make([]string, 0, len(preset.Env))
+			for key := range preset.Env {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			entry["env_keys"] = keys
+		}
+		out[name] = entry
+	}
+	return out
 }
 
 func summarizeCommandTemplates(templates map[string]config.CommandTemplate) map[string]any {

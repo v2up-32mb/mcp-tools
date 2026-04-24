@@ -42,6 +42,7 @@
 - `TargetPath`
 - `Workdir`
 - `Allowed`
+- `EnvKeys`
 - `Stdout`
 - `Stderr`
 - `ExitCode`
@@ -467,17 +468,31 @@ git pull --ff-only
 - `go_build`
 - `go_vet`
 - `go_mod_tidy`
+- `go_get`
+- `go_list`
+- `go_work_sync`
 
 ### 参数白名单策略
 - 以 `-` 开头的参数必须匹配 `AllowedArgs`
-- 非 flag 参数必须是 workdir 内的本地 target
+- 非 flag 参数默认必须是 workdir 内的本地 target
+- 仅 `go_get` 第一版允许受控模块参数（如 `example.com/mod@v1.2.3`）
 - `go_test` / `go_generate` / `go_build` / `go_vet` 在没有显式 target 时会自动补 `./...`
 - `go_mod_download` 会直接在 `workdir` 中执行 `go mod download`
 - `go_mod_tidy` 不会自动补 target，而是直接在 `workdir` 中执行 `go mod tidy`
+- `go_work_sync` 不会自动补 target，而是直接在 `workdir` 中执行 `go work sync`
 - `timeout_override_sec` 只允许缩短默认超时
 - 禁止绝对路径、URL、`..` 越界路径
 - 对 `-o=...`、`-coverprofile=...` 这类 inline 路径参数也会再次校验，不能借 `flag=value` 写到 workdir 外
 - `-vettool` 当前明确不支持
+
+### Go managed cache 策略
+- 所有 Go preset 当前都会注入固定 env：
+  - `GOCACHE`
+  - `GOMODCACHE`
+  - `GOTMPDIR`
+- 默认写入 `~/.mcp-tools/cache/...`
+- `runExecCommand` 在执行前会主动 `mkdir -p` 这些目录
+- 目标是把依赖下载、编译缓存与临时目录写入收口到受控范围，而不是散落到外部系统目录
 
 ### 输出策略
 - stdout/stderr 会按 `OutputMaxBytes` 截断
@@ -487,6 +502,7 @@ git pull --ff-only
   - `stdout`
   - `stderr`
   - `argv`
+  - `env_keys`（若 preset 配置了固定 env）
 
 ---
 
@@ -647,6 +663,7 @@ event: message
 - 当前 active sessions / streams / resource subscriptions
 - async stream publish 是否频繁 fallback
 - `notifications/resources/updated` 是否存在明显投递丢失
+- 当前 `exec_presets` / `command_templates` 的元信息摘要（包括 `env_keys`）
 
 ---
 

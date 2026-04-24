@@ -61,6 +61,7 @@ type ExecPreset struct {
 	Command     string
 	FixedArgs   []string
 	AllowedArgs []string
+	Env         map[string]string
 	Timeout     time.Duration
 	ReadOnly    bool
 }
@@ -114,12 +115,13 @@ type fileExecConfig struct {
 }
 
 type fileExecPreset struct {
-	Enabled     *bool    `yaml:"enabled"`
-	Command     string   `yaml:"command"`
-	FixedArgs   []string `yaml:"fixed_args"`
-	AllowedArgs []string `yaml:"allowed_args"`
-	TimeoutSec  *int     `yaml:"timeout_sec"`
-	ReadOnly    *bool    `yaml:"read_only"`
+	Enabled     *bool             `yaml:"enabled"`
+	Command     string            `yaml:"command"`
+	FixedArgs   []string          `yaml:"fixed_args"`
+	AllowedArgs []string          `yaml:"allowed_args"`
+	Env         map[string]string `yaml:"env"`
+	TimeoutSec  *int              `yaml:"timeout_sec"`
+	ReadOnly    *bool             `yaml:"read_only"`
 }
 
 type fileCommandTemplate struct {
@@ -406,6 +408,7 @@ func defaultGitAllowed() map[string]bool {
 }
 
 func defaultExecPresets(baseTimeout time.Duration) map[string]ExecPreset {
+	goEnv := defaultManagedGoEnv()
 	return map[string]ExecPreset{
 		"go_fmt": {
 			Command:     "gofmt",
@@ -417,12 +420,14 @@ func defaultExecPresets(baseTimeout time.Duration) map[string]ExecPreset {
 			Command:     "go",
 			FixedArgs:   []string{"mod", "download"},
 			AllowedArgs: []string{"-x", "-json"},
+			Env:         cloneMapStrings(goEnv),
 			Timeout:     baseTimeout,
 		},
 		"go_test": {
 			Command:     "go",
 			FixedArgs:   []string{"test"},
 			AllowedArgs: []string{"-run", "-count", "-timeout", "-v", "-race", "-cover", "-coverprofile"},
+			Env:         cloneMapStrings(goEnv),
 			Timeout:     baseTimeout,
 			ReadOnly:    true,
 		},
@@ -430,18 +435,21 @@ func defaultExecPresets(baseTimeout time.Duration) map[string]ExecPreset {
 			Command:     "go",
 			FixedArgs:   []string{"generate"},
 			AllowedArgs: []string{"-run", "-skip", "-v", "-x", "-n", "-tags"},
+			Env:         cloneMapStrings(goEnv),
 			Timeout:     baseTimeout,
 		},
 		"go_build": {
 			Command:     "go",
 			FixedArgs:   []string{"build"},
 			AllowedArgs: []string{"-v", "-race", "-o", "-tags"},
+			Env:         cloneMapStrings(goEnv),
 			Timeout:     baseTimeout,
 		},
 		"go_vet": {
 			Command:     "go",
 			FixedArgs:   []string{"vet"},
 			AllowedArgs: []string{"-tags"},
+			Env:         cloneMapStrings(goEnv),
 			Timeout:     baseTimeout,
 			ReadOnly:    true,
 		},
@@ -449,8 +457,43 @@ func defaultExecPresets(baseTimeout time.Duration) map[string]ExecPreset {
 			Command:     "go",
 			FixedArgs:   []string{"mod", "tidy"},
 			AllowedArgs: []string{"-v", "-e", "-diff", "-go", "-compat", "-x"},
+			Env:         cloneMapStrings(goEnv),
 			Timeout:     baseTimeout,
 		},
+		"go_get": {
+			Command:     "go",
+			FixedArgs:   []string{"get"},
+			AllowedArgs: []string{"-t", "-u", "-x", "-tags"},
+			Env:         cloneMapStrings(goEnv),
+			Timeout:     baseTimeout,
+		},
+		"go_list": {
+			Command:     "go",
+			FixedArgs:   []string{"list"},
+			AllowedArgs: []string{"-deps", "-json", "-test", "-tags"},
+			Env:         cloneMapStrings(goEnv),
+			Timeout:     baseTimeout,
+			ReadOnly:    true,
+		},
+		"go_work_sync": {
+			Command:   "go",
+			FixedArgs: []string{"work", "sync"},
+			Env:       cloneMapStrings(goEnv),
+			Timeout:   baseTimeout,
+		},
+	}
+}
+
+func defaultManagedGoEnv() map[string]string {
+	configDir, ok := defaultConfigDir()
+	cacheRoot := filepath.Join(".", ".mcp-tools", "cache")
+	if ok {
+		cacheRoot = filepath.Join(configDir, "cache")
+	}
+	return map[string]string{
+		"GOCACHE":    filepath.Join(cacheRoot, "go-build"),
+		"GOMODCACHE": filepath.Join(cacheRoot, "gomod"),
+		"GOTMPDIR":   filepath.Join(cacheRoot, "tmp"),
 	}
 }
 
@@ -508,6 +551,9 @@ func mergeExecPresets(base map[string]ExecPreset, overrides map[string]fileExecP
 		}
 		if override.AllowedArgs != nil {
 			preset.AllowedArgs = cloneStrings(override.AllowedArgs)
+		}
+		if override.Env != nil {
+			preset.Env = cloneMapStrings(override.Env)
 		}
 		if override.TimeoutSec != nil {
 			preset.Timeout = time.Duration(*override.TimeoutSec) * time.Second
@@ -630,6 +676,11 @@ func validateConfig(cfg Config) error {
 		for _, arg := range preset.AllowedArgs {
 			if strings.TrimSpace(arg) == "-vettool" {
 				return fmt.Errorf("exec preset %q cannot allow -vettool", name)
+			}
+		}
+		for key := range preset.Env {
+			if strings.TrimSpace(key) == "" {
+				return fmt.Errorf("exec preset %q env cannot contain empty keys", name)
 			}
 		}
 	}

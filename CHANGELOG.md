@@ -12,6 +12,11 @@
   - `go.find_definition`
 - `go.list_symbols` 支持返回单个 Go 文件中的顶层 `func` / `method` / `type` / `var` / `const` 结构索引。
 - `go.find_definition` 支持按 `path + line + column` 跳转到 package-level declarations、methods 与 imported package symbols 的定义位置，并对外部定义返回 `in_allowed_roots=false`。
+- 扩展 `exec.run` 的 Go preset：
+  - `go_get`
+  - `go_list`
+  - `go_work_sync`
+- 所有 Go preset 现在会把 `GOCACHE` / `GOMODCACHE` / `GOTMPDIR` 固定到 `~/.mcp-tools/cache` 下，降低依赖下载和构建缓存对外部目录的污染。
 
 ### Fixed
 - 加固路径解析，修复 symlink 与多级缺失路径组合下的允许目录绕过风险。

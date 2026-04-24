@@ -178,6 +178,9 @@ exec:
       timeout_sec: 30
       read_only: true
 
+    # 所有 Go preset 默认都会把 GOCACHE / GOMODCACHE / GOTMPDIR
+    # 固定到 ~/.mcp-tools/cache 下，因此依赖下载和构建缓存不会外溢到不可控的系统目录。
+
     # go mod tidy
     go_mod_tidy:
       enabled: true
@@ -187,35 +190,61 @@ exec:
       timeout_sec: 30
       read_only: false
 
-    # fixed command templates for exec.run_template
-    command_templates:
-      make_test:
-        enabled: true
-        command: ["make", "test"]
-        category: test
-        destructive: false
-        requires_confirmation: false
-        allowed_workdirs: ["."]
-        timeout_sec: 30
-        read_only: false
+    # go get <module@version>
+    go_get:
+      enabled: true
+      command: go
+      fixed_args: ["get"]
+      allowed_args: ["-t", "-u", "-x", "-tags"]
+      timeout_sec: 30
+      read_only: false
 
-      make_build:
-        enabled: true
-        command: ["make", "build"]
-        category: build
-        destructive: false
-        requires_confirmation: false
-        allowed_workdirs: ["."]
-        timeout_sec: 30
-        read_only: false
+    # go list
+    go_list:
+      enabled: true
+      command: go
+      fixed_args: ["list"]
+      allowed_args: ["-deps", "-json", "-test", "-tags"]
+      timeout_sec: 30
+      read_only: true
 
-      go_clean_testcache:
-        enabled: true
-        command: ["go", "clean", "-testcache"]
-        category: cleanup
-        destructive: true
-        requires_confirmation: true
-        env:
-          GOFLAGS: ""
-        timeout_sec: 30
-        read_only: false
+    # go work sync
+    go_work_sync:
+      enabled: true
+      command: go
+      fixed_args: ["work", "sync"]
+      timeout_sec: 30
+      read_only: false
+
+  # fixed command templates for exec.run_template
+  command_templates:
+    make_test:
+      enabled: true
+      command: ["make", "test"]
+      category: test
+      destructive: false
+      requires_confirmation: false
+      allowed_workdirs: ["."]
+      timeout_sec: 30
+      read_only: false
+
+    make_build:
+      enabled: true
+      command: ["make", "build"]
+      category: build
+      destructive: false
+      requires_confirmation: false
+      allowed_workdirs: ["."]
+      timeout_sec: 30
+      read_only: false
+
+    go_clean_testcache:
+      enabled: true
+      command: ["go", "clean", "-testcache"]
+      category: cleanup
+      destructive: true
+      requires_confirmation: true
+      env:
+        GOFLAGS: ""
+      timeout_sec: 30
+      read_only: false

@@ -214,13 +214,15 @@ data: {jsonrpc response or notification}
 - `go_build`
 - `go_vet`
 - `go_mod_tidy`
+- `go_get`
+- `go_list`
+- `go_work_sync`
 
 当前内置 command templates：
 
 - `make_test`
 - `make_build`
 - `go_clean_testcache`
-- `go_mod_tidy`
 
 这不是 shell。客户端不能发送任意命令字符串。
 
@@ -256,6 +258,7 @@ data: {jsonrpc response or notification}
 - tool 名
 - 参数摘要
 - target path / workdir
+- 固定 env 的 `env_keys` 摘要（若适用）
 - stdout / stderr 摘要
 - result digest
 - exit code
@@ -299,6 +302,7 @@ data: {jsonrpc response or notification}
 - 资源订阅 session / total 数
 - async stream 投递次数 / 成功次数 / fallback 次数
 - `notifications/resources/updated` 的投递/丢弃计数
+- `exec_presets` / `command_templates` 的元信息摘要（含 `env_keys`）
 
 ---
 
@@ -391,6 +395,14 @@ data: {jsonrpc response or notification}
 - `go_test` / `go_generate` / `go_build` / `go_vet` 没有显式 target 时会自动补 `./...`
 - `go_mod_download` 会直接在 `workdir` 里执行 `go mod download`
 - `go_mod_tidy` 会直接在 `workdir` 里执行 `go mod tidy`
+- `go_get` 允许受控模块参数（例如 `example.com/mod@v1.2.3`）或本地 target
+- `go_list` 适合探查 Go 包/依赖信息
+- `go_work_sync` 会直接在 `workdir` 里执行 `go work sync`
+- 所有 Go preset 会把这些目录固定到 `~/.mcp-tools/cache` 下：
+  - `GOCACHE`
+  - `GOMODCACHE`
+  - `GOTMPDIR`
+- 这是为了把依赖下载、构建缓存和临时目录写入收口到受控范围
 - `timeout_override_sec` 只能缩短默认超时
 - `-vettool` 不支持
 - `-o=...` / `-coverprofile=...` 这类 inline 路径值也会再次校验，不能写到 workdir 外

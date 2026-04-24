@@ -1356,3 +1356,53 @@ func TestStatezCountsTemplateConfirmationBlocked(t *testing.T) {
 		t.Fatalf("expected cleanup blocked counter, got %#v", blockedPerTemplate)
 	}
 }
+
+func TestStatezIncludesExecPresetMetadata(t *testing.T) {
+	handler, _, _ := newTestServerWithConfig(t, func(cfg *config.Config) {
+		cfg.ExecPresets = map[string]config.ExecPreset{
+			"go_get": {
+				Command:     "go",
+				FixedArgs:   []string{"get"},
+				AllowedArgs: []string{"-u", "-t", "-x", "-tags"},
+				Env: map[string]string{
+					"GOCACHE":    filepath.Join(cfg.StartupDirectory, ".mcp-tools", "cache", "go-build"),
+					"GOMODCACHE": filepath.Join(cfg.StartupDirectory, ".mcp-tools", "cache", "gomod"),
+					"GOTMPDIR":   filepath.Join(cfg.StartupDirectory, ".mcp-tools", "cache", "tmp"),
+				},
+				Timeout:  5 * time.Second,
+				ReadOnly: false,
+			},
+		}
+	})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	stateReq, err := http.NewRequest(http.MethodGet, ts.URL+"/debug/statez", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateReq.Header.Set("Authorization", "Bearer secret")
+	stateResp, err := http.DefaultClient.Do(stateReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stateResp.Body.Close()
+	if stateResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(stateResp.Body)
+		t.Fatalf("statez status=%d body=%s", stateResp.StatusCode, string(body))
+	}
+	var snapshot map[string]any
+	if err := json.NewDecoder(stateResp.Body).Decode(&snapshot); err != nil {
+		t.Fatal(err)
+	}
+	configSection := snapshot["config"].(map[string]any)
+	presets := configSection["exec_presets"].(map[string]any)
+	goGet := presets["go_get"].(map[string]any)
+	if goGet["command"] != "go" || goGet["read_only"] != false {
+		t.Fatalf("unexpected preset metadata: %#v", goGet)
+	}
+	envKeys := goGet["env_keys"].([]any)
+	if len(envKeys) != 3 {
+		t.Fatalf("expected env keys in preset metadata, got %#v", goGet)
+	}
+}

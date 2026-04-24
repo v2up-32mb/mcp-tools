@@ -24,6 +24,7 @@ type Event struct {
 	ExitCode        *int           `json:"exit_code,omitempty"`
 	Stdout          string         `json:"stdout,omitempty"`
 	Stderr          string         `json:"stderr,omitempty"`
+	EnvKeys         []string       `json:"env_keys,omitempty"`
 	DurationMS      int64          `json:"duration_ms"`
 	ResultDigest    string         `json:"result_digest,omitempty"`
 }

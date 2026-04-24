@@ -50,7 +50,7 @@ func NewTools(cfg config.Config) []mcp.Tool {
 
 func (configuredTool) Name() string { return "exec.run" }
 func (configuredTool) Description() string {
-	return "Run a predefined Go toolchain preset inside an allowed working directory. workdir is required; go_test/go_generate/go_build/go_vet default to ./... when no target is provided; go_mod_download and go_mod_tidy run directly in workdir; timeout_override_sec can only shorten the preset timeout; inline output paths are revalidated; -vettool is not supported."
+	return "Run a predefined Go toolchain preset inside an allowed working directory. workdir is required; go_test/go_generate/go_build/go_vet default to ./... when no target is provided; go_mod_download/go_mod_tidy/go_get/go_list/go_work_sync use managed Go cache directories under ~/.mcp-tools/cache; timeout_override_sec can only shorten the preset timeout; inline output paths are revalidated; -vettool is not supported."
 }
 func (configuredTool) ReadOnly() bool { return false }
 func (configuredTool) Schema() map[string]any {
@@ -157,7 +157,7 @@ func (t configuredTool) Call(ctx context.Context, _ mcp.CallContext, args map[st
 
 	timeout := applyTimeoutOverride(preset.Timeout, args["timeout_override_sec"])
 	fullArgv := append([]string{preset.Command}, argv...)
-	return runExecCommand(ctx, t.cfg, presetName, "preset", fullArgv, resolvedWorkdir, rawWorkdir, timeout, nil, preset.ReadOnly, nil)
+	return runExecCommand(ctx, t.cfg, presetName, "preset", fullArgv, resolvedWorkdir, rawWorkdir, timeout, preset.Env, preset.ReadOnly, nil)
 }
 
 func resolveWorkdir(cfg config.Config, args map[string]any) (string, string, error) {
@@ -195,6 +195,10 @@ func applyTimeoutOverride(timeout time.Duration, raw any) time.Duration {
 func runExecCommand(ctx context.Context, cfg config.Config, name string, mode string, argv []string, resolvedWorkdir string, rawWorkdir string, timeout time.Duration, fixedEnv map[string]string, readOnly bool, extraStructured map[string]any) (mcp.Result, error) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if err := ensureManagedEnvDirs(fixedEnv); err != nil {
+		auditData := mcp.AuditData{Workdir: resolvedWorkdir, Allowed: true, ResultDigest: fmt.Sprintf("exec %s %s env setup failed", mode, name)}
+		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("prepare exec %s %s env: %w", mode, name, err), auditData)
+	}
 	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	cmd.Dir = resolvedWorkdir
 	cmd.Env = mergeCommandEnv(os.Environ(), fixedEnv)
@@ -206,6 +210,9 @@ func runExecCommand(ctx context.Context, cfg config.Config, name string, mode st
 	stdout := truncate(stdoutBuf.String(), cfg.OutputMaxBytes)
 	stderr := truncate(stderrBuf.String(), cfg.OutputMaxBytes)
 	auditData := mcp.AuditData{Workdir: resolvedWorkdir, Allowed: true, Stdout: stdout, Stderr: stderr, ResultDigest: fmt.Sprintf("exec %s %s", mode, name)}
+	if len(fixedEnv) > 0 {
+		auditData.EnvKeys = sortedEnvKeys(fixedEnv)
+	}
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			code := exitErr.ExitCode()
@@ -371,10 +378,13 @@ func validateArgs(presetName string, preset config.ExecPreset, raw any) ([]strin
 			out = append(out, name)
 			continue
 		}
-		if !isLocalTarget(arg) {
+		if !isAllowedPositionalArg(presetName, arg) {
 			return nil, fmt.Errorf("arg %q must stay within the working directory", arg)
 		}
-		out = append(out, filepath.ToSlash(filepath.Clean(arg)))
+		if !presetAllowsPositionalArg(presetName) {
+			return nil, fmt.Errorf("preset %s does not accept positional args", presetName)
+		}
+		out = append(out, normalizePositionalArg(presetName, arg))
 	}
 	return out, nil
 }
@@ -414,6 +424,65 @@ func isLocalTarget(arg string) bool {
 		return false
 	}
 	return true
+}
+
+func isAllowedPositionalArg(presetName string, arg string) bool {
+	if isLocalTarget(arg) {
+		return true
+	}
+	switch presetName {
+	case "go_get":
+		return isModuleSpec(arg)
+	default:
+		return false
+	}
+}
+
+func presetAllowsPositionalArg(presetName string) bool {
+	switch presetName {
+	case "go_mod_download", "go_mod_tidy", "go_work_sync":
+		return false
+	default:
+		return true
+	}
+}
+
+func normalizePositionalArg(presetName string, arg string) string {
+	if isLocalTarget(arg) {
+		return filepath.ToSlash(filepath.Clean(arg))
+	}
+	return arg
+}
+
+func isModuleSpec(arg string) bool {
+	if strings.TrimSpace(arg) == "" || strings.Contains(arg, "://") || strings.HasPrefix(arg, "-") || filepath.IsAbs(arg) {
+		return false
+	}
+	if strings.ContainsAny(arg, " \t\r\n") {
+		return false
+	}
+	modulePath := arg
+	if name, _, ok := strings.Cut(arg, "@"); ok {
+		modulePath = name
+	}
+	if modulePath == "" {
+		return false
+	}
+	first, _, _ := strings.Cut(modulePath, "/")
+	return strings.Contains(first, ".")
+}
+
+func ensureManagedEnvDirs(fixedEnv map[string]string) error {
+	for _, key := range []string{"GOCACHE", "GOMODCACHE", "GOTMPDIR"} {
+		path := strings.TrimSpace(fixedEnv[key])
+		if path == "" {
+			continue
+		}
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func truncate(text string, limit int) string {
