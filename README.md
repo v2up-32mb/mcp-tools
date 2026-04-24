@@ -1,6 +1,6 @@
 # mcp-tools
 
-一个基于 Go 1.20 的单体 MCP HTTP 服务，提供受限的文件系统、Git 与 Go 工具链执行能力，供远程 AI 代理通过 MCP 调用本地工具。
+一个基于 Go 1.25 的单体 MCP HTTP 服务，提供受限的文件系统、Git、Go 导航与 Go 工具链执行能力，供远程 AI 代理通过 MCP 调用本地工具。
 
 补充维护文档：
 
@@ -44,9 +44,12 @@
   - `git.branch`
   - `git.switch`
   - `git.pull`
+- **Go 导航工具**
+  - `go.list_symbols`
+  - `go.find_definition`
 - **Exec 工具**
   - `exec.run`
-- `exec.run_template`
+  - `exec.run_template`
   - 仅开放 Go preset：`go_fmt` / `go_mod_download` / `go_test` / `go_generate` / `go_build` / `go_vet` / `go_mod_tidy`
 - 同时支持固定白名单命令模板：`make_test` / `make_build` / `go_clean_testcache`（默认要求 `confirm=true`）
 - 审计日志：JSON Lines
@@ -804,6 +807,77 @@ curl -s http://127.0.0.1:8080/mcp   -H 'Authorization: Bearer change-me'   -H "M
     }
   }'
 ```
+
+### 13. Go 导航工具
+
+这两个工具用于补齐 coding agent 的 **outline + definition** 工作流：
+
+- `go.list_symbols`
+  - 输入：单个 Go 文件 `path`
+  - 输出：该文件中的顶层 `func` / `method` / `type` / `var` / `const`
+- `go.find_definition`
+  - 输入：`path + line + column`
+  - 第一版只覆盖 package-level declarations、methods 与 imported package symbols
+  - 若定义落在 `allowed_roots` 外，仍会返回位置，但会标记 `in_allowed_roots=false`
+
+适合场景：
+
+- 先看清一个 Go 文件里有哪些顶层声明
+- 再从当前光标位置跳到定义
+- 再决定是否继续 `fs.read_file` / `fs.apply_unified_diff`
+
+### 13.1 go.list_symbols
+
+```bash
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer change-me' \
+  -H "Mcp-Session-Id: ${SESSION_ID}" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "tools/call",
+    "params": {
+      "name": "go.list_symbols",
+      "arguments": {
+        "path": "internal/httpapi/server.go"
+      }
+    }
+  }'
+```
+
+### 13.2 go.find_definition
+
+```bash
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer change-me' \
+  -H "Mcp-Session-Id: ${SESSION_ID}" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 9,
+    "method": "tools/call",
+    "params": {
+      "name": "go.find_definition",
+      "arguments": {
+        "path": "internal/httpapi/server.go",
+        "line": 180,
+        "column": 12
+      }
+    }
+  }'
+```
+
+如果定义位于依赖或标准库源码中，返回结构会类似：
+
+- `definition_path`
+- `definition_line`
+- `definition_column`
+- `symbol_name`
+- `symbol_kind`
+- `in_allowed_roots=false`
+
+这意味着 agent 已经知道“定义在哪”，但**并不等于**服务端会自动放开对外部文件的读取边界。
 
 ## 演示脚本
 

@@ -20,6 +20,7 @@ import (
 	execx "github.com/example/mcp-tools/internal/tools/execx"
 	fstools "github.com/example/mcp-tools/internal/tools/fs"
 	gittools "github.com/example/mcp-tools/internal/tools/git"
+	golangx "github.com/example/mcp-tools/internal/tools/golangx"
 )
 
 func main() {
@@ -55,6 +56,9 @@ func run() error {
 		registry.Register(t)
 	}
 	for _, t := range execx.NewTools(cfg) {
+		registry.Register(t)
+	}
+	for _, t := range golangx.NewTools(cfg) {
 		registry.Register(t)
 	}
 

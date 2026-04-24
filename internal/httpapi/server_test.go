@@ -18,6 +18,7 @@ import (
 	execx "github.com/example/mcp-tools/internal/tools/execx"
 	fstools "github.com/example/mcp-tools/internal/tools/fs"
 	gittools "github.com/example/mcp-tools/internal/tools/git"
+	golangx "github.com/example/mcp-tools/internal/tools/golangx"
 )
 
 func newTestServer(t *testing.T) (http.Handler, string, string) {
@@ -66,6 +67,9 @@ func newTestServerWithConfig(t *testing.T, mutate func(*config.Config)) (http.Ha
 		registry.Register(tool)
 	}
 	for _, tool := range execx.NewTools(cfg) {
+		registry.Register(tool)
+	}
+	for _, tool := range golangx.NewTools(cfg) {
 		registry.Register(tool)
 	}
 	return NewServer(cfg, registry), dir, auditPath

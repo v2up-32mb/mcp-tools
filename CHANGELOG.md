@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### Added
+- 新增 Go-only 导航工具：
+  - `go.list_symbols`
+  - `go.find_definition`
+- `go.list_symbols` 支持返回单个 Go 文件中的顶层 `func` / `method` / `type` / `var` / `const` 结构索引。
+- `go.find_definition` 支持按 `path + line + column` 跳转到 package-level declarations、methods 与 imported package symbols 的定义位置，并对外部定义返回 `in_allowed_roots=false`。
+
 ### Fixed
 - 加固路径解析，修复 symlink 与多级缺失路径组合下的允许目录绕过风险。
 - 加固 `exec.run` 参数校验，禁止通过 `flag=value` 形式把输出写到工作目录外，并禁用 `-vettool`。
@@ -59,4 +66,3 @@
   - `mcp-tools.example.yaml`
   - `scripts/demo_stream.sh`
   - `scripts/demo_capabilities.sh`
-

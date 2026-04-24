@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -147,7 +148,7 @@ func wrapPatchFailure(path string, failure *patchFailure, fallback string) error
 			structured["actual_lines"] = failure.ActualLines
 		}
 	}
-	return mcp.WrapToolErrorWithStructured(fmt.Errorf(message), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "patch apply failed"}, structured)
+	return mcp.WrapToolErrorWithStructured(errors.New(message), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "patch apply failed"}, structured)
 }
 
 func parseUnifiedDiff(diffText string) (unifiedFilePatch, *patchFailure) {

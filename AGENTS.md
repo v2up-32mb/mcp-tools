@@ -11,11 +11,12 @@
 
 ## 1. 服务定位
 
-这是一个基于 Go 1.20 的单体 MCP 服务，主要面向“远程 AI 代理安全操作本地工作区”的场景。
+这是一个基于 Go 1.25 的单体 MCP 服务，主要面向“远程 AI 代理安全操作本地工作区”的场景。
 
 当前能力边界：
 
 - 文件系统工具：读、写、列目录、查找、局部编辑、移动、删除
+- Go 导航工具：单文件 symbols 与按光标位置跳定义
 - Git 白名单工具：只开放固定子命令，不开放任意 git 命令
 - Exec 工具：只开放受限 Go toolchain preset，不开放任意 shell
 - MCP 能力：tools / resources / prompts / completion
@@ -194,7 +195,12 @@ data: {jsonrpc response or notification}
 - 任意原始 git 子命令透传
 - 任意 credential / global config 相关操作
 
-### 5.3 Exec 工具
+### 5.3 Go 导航工具
+
+- `go.list_symbols`
+- `go.find_definition`
+
+### 5.4 Exec 工具
 
 - `exec.run`
 - `exec.run_template`
@@ -402,6 +408,49 @@ data: {jsonrpc response or notification}
 - `workdir` 仍然必须落在 `allowed_roots` 内
 - 适合逐步放开命令执行，而不炸开安全边界
 
+## 7.7 `go.*` 使用约定
+
+### `go.list_symbols`
+
+- 第一版只接受单个 Go 文件 `path`
+- 只返回该文件的顶层声明：
+  - `func`
+  - `method`
+  - `type`
+  - `var`
+  - `const`
+- 适合先看清文件结构，再决定是否继续读取或修改
+
+### `go.find_definition`
+
+- 输入必须是：
+  - `path`
+  - `line`
+  - `column`
+- 第一版只覆盖：
+  - package-level declarations
+  - methods
+  - imported package symbols
+- 当前不保证支持：
+  - 局部变量
+  - label
+  - 其他更细粒度的局部目标
+- 返回内容是：
+  - 定义位置
+  - 最小符号摘要
+  - `in_allowed_roots`
+- 如果定义落在 `allowed_roots` 外，服务端仍会返回位置，但会标记：
+  - `in_allowed_roots=false`
+
+### 推荐做法
+
+1. 先 `go.list_symbols` 看文件结构
+2. 再用 `go.find_definition` 沿着具体标识符跳定义
+3. 若定义仍在允许目录内，再 `fs.read_file`
+4. 修改时优先：
+   - 复杂改动用 `fs.apply_unified_diff`
+   - 小改动用 `fs.edit_lines`
+
 ## 8. 推荐调用流程
 
 ### 文件修改型任务
@@ -417,11 +466,13 @@ data: {jsonrpc response or notification}
 
 ### 代码任务（Go）
 
-1. 读取目标文件
-2. 复杂修改优先使用 `fs.apply_unified_diff`，小改动优先使用 `fs.edit_lines`
-3. `exec.run(go_fmt)`
-4. `exec.run(go_test)`
-5. 若需要，再 `git.status` / `git.diff`
+1. 先 `go.list_symbols` 看结构
+2. 再按需要 `go.find_definition`
+3. 读取目标文件
+4. 复杂修改优先使用 `fs.apply_unified_diff`，小改动优先使用 `fs.edit_lines`
+5. `exec.run(go_fmt)`
+6. `exec.run(go_test)`
+7. 若需要，再 `git.status` / `git.diff`
 
 ---
 

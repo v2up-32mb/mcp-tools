@@ -833,7 +833,7 @@ func (s *Server) listPrompts() []map[string]any {
 		{
 			"name":        "go_dev_loop",
 			"title":       "Go Dev Loop",
-			"description": "Iterate on a Go code change using fs tools plus exec.run gofmt/go test/go vet.",
+			"description": "Iterate on a Go code change using go.list_symbols/go.find_definition, fs editing tools, and exec.run gofmt/go test/go vet.",
 			"arguments": []map[string]any{
 				promptArgument("goal", "Requested Go change or bug fix.", true),
 				promptArgument("workdir", "Working directory for Go commands.", true),
@@ -914,7 +914,7 @@ func (s *Server) getPrompt(name string, args map[string]any) (map[string]any, er
 		if !runVetOK {
 			runVet = true
 		}
-		text := fmt.Sprintf("Work in %s to achieve %q. Inspect relevant files, use fs.apply_unified_diff for complex edits (or fs.edit_lines / fs.write_file when simpler), then run exec.run with go_fmt and go_test (target %s) as needed.", workdir, goal, testTarget)
+		text := fmt.Sprintf("Work in %s to achieve %q. Start with go.list_symbols and go.find_definition when that helps you understand the Go code, then inspect relevant files, use fs.apply_unified_diff for complex edits (or fs.edit_lines / fs.write_file when simpler), then run exec.run with go_fmt and go_test (target %s) as needed.", workdir, goal, testTarget)
 		if runVet {
 			text += " Include go_vet before concluding."
 		}

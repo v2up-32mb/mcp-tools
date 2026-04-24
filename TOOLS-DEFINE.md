@@ -14,6 +14,7 @@
 - `git.*`：受限 Git 子命令
 - `exec.run`：受限命令执行 preset
 - `exec.run_template`：受限固定模板命令执行
+- `go.*`：Go-only 导航工具
 
 统一约束：
 
@@ -466,7 +467,6 @@ git pull --ff-only
 - `go_build`
 - `go_vet`
 - `go_mod_tidy`
-- `go_mod_tidy`
 
 ### 参数白名单策略
 - 以 `-` 开头的参数必须匹配 `AllowedArgs`
@@ -521,6 +521,89 @@ git pull --ff-only
 ### discoverability
 - `exec.run_template` 的 schema 中，`template` 字段会带当前模板名 `enum`
 - `/debug/statez` 会返回模板元信息（command/category/destructive/requires_confirmation/read_only/env_keys/allowed_workdirs）和模板调用计数
+
+---
+
+## 5.2 `go.*` 工具定义
+
+### 5.2.1 总体约束
+
+- 第一版是 **Go-only**
+- 不依赖 `gopls` 守护进程
+- 内部使用：
+  - `go/packages` 负责加载真实 Go package / type 信息
+  - `go/ast` 负责抽取文件结构
+- 所有 `path` 仍需落在 `allowed_roots` 内
+- `go.find_definition` 若跳到 `allowed_roots` 外，只返回位置，不放开读取边界
+
+### 5.2.2 `go.list_symbols`
+
+#### 作用
+返回单个 Go 文件中的顶层结构索引，供 agent 做 outline。
+
+#### 输入参数
+- `path`
+
+#### 关键步骤
+1. 解析 `path`
+2. 要求目标必须是 `.go` 文件
+3. 用 `go/packages` 加载该文件所属 package
+4. 只遍历目标文件 AST
+5. 抽取顶层声明：
+   - `func`
+   - `method`
+   - `type`
+   - `var`
+   - `const`
+6. 为每个 symbol 返回名称、类型、导出性与源码范围
+
+#### 边界说明
+- 第一版只做**单文件** symbols
+- 不做 package-level 聚合
+- 不做 workspace-wide symbols
+
+### 5.2.3 `go.find_definition`
+
+#### 作用
+按 `path + line + column` 解析 Go 标识符并返回定义位置。
+
+#### 输入参数
+- `path`
+- `line`
+- `column`
+
+#### 关键步骤
+1. 解析 `path`
+2. 用 `go/packages` 加载所属 package，并要求拿到 type info
+3. 把 `line + column` 转成 `token.Pos`
+4. 在目标文件 AST 中找到对应 identifier
+5. 优先处理 selector / method selection
+6. 用 `types.Info` 取 `Uses` / `Defs` / `Selections`
+7. 只接受第一版支持的对象范围：
+   - package-level `func`
+   - `method`
+   - package-level `type`
+   - package-level `var`
+   - package-level `const`
+   - imported package symbols
+8. 返回定义位置 + 最小符号摘要
+
+#### 边界说明
+- 当前不保证支持局部变量 / label 等更细粒度局部目标
+- 若定义落在 `allowed_roots` 外，会返回：
+  - `definition_path`
+  - `definition_line`
+  - `definition_column`
+  - `in_allowed_roots=false`
+
+#### 常见失败 reason
+- `not_go_file`
+- `package_load_failed`
+- `parse_failed`
+- `identifier_not_found`
+- `definition_not_resolved`
+- `position_out_of_bounds`
+- `path_outside_allowed_roots`
 
 ---
 
