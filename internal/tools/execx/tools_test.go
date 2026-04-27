@@ -63,14 +63,14 @@ func TestValidateArgsAllowsInlineRelativePathFlags(t *testing.T) {
 
 func TestValidateArgsAllowsGoModTidyInlineVersionFlags(t *testing.T) {
 	preset := config.ExecPreset{AllowedArgs: []string{"-go", "-compat", "-v"}, Timeout: time.Second}
-	got, err := validateArgs("go_mod_tidy", preset, []any{"-go=1.25", "-compat=1.24", "-v"})
+	got, err := validateArgs("go_mod_tidy", preset, []any{"-go=1.20", "-compat=1.19", "-v"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(got) != 3 {
 		t.Fatalf("unexpected args: %#v", got)
 	}
-	if got[0] != "-go=1.25" || got[1] != "-compat=1.24" {
+	if got[0] != "-go=1.20" || got[1] != "-compat=1.19" {
 		t.Fatalf("unexpected normalized flags: %#v", got)
 	}
 }

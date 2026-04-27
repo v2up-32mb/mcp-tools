@@ -45,7 +45,7 @@ func TestRunTemplateRejectsUnknownTemplate(t *testing.T) {
 func TestRunTemplateExecutesConfiguredCommand(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "go.mod")
-	if err := os.WriteFile(target, []byte("module example.com/test\n\ngo 1.25\n"), 0o644); err != nil {
+	if err := os.WriteFile(target, []byte("module example.com/test\n\ngo 1.20\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Config{
