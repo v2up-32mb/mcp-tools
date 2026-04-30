@@ -20,6 +20,7 @@
 
 ### Fixed
 - 恢复项目 Go 基线到 `go 1.20`，并将 `golang.org/x/tools` / `golang.org/x/mod` / `golang.org/x/sync` 依赖链回退到与 Windows 7 目标场景一致的兼容版本。
+- 调整 `GET /mcp` 的 stale-session 处理：服务重启后若客户端仍带旧 `Mcp-Session-Id` 开 stream，服务端现在按“未初始化 session”返回重连提示，避免首个重连动作直接落成 `invalid or expired session`。
 - 加固路径解析，修复 symlink 与多级缺失路径组合下的允许目录绕过风险。
 - 加固 `exec.run` 参数校验，禁止通过 `flag=value` 形式把输出写到工作目录外，并禁用 `-vettool`。
 - 修复 `fs.search_text` 在超长单行文件上因 `bufio.Scanner` token 上限而失败的问题。

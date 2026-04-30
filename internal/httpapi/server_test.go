@@ -1129,6 +1129,47 @@ func TestGetStreamWithoutSessionReturns405(t *testing.T) {
 	}
 }
 
+func TestGetStreamWithStaleSessionReturns405(t *testing.T) {
+	handler1, _, _ := newTestServer(t)
+	staleSessionID := initializeSession(t, handler1)
+
+	handler2, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set(sessionHeader, staleSessionID)
+	rec := httptest.NewRecorder()
+	handler2.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405 for stale session, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "initialized session") {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestInitializeIgnoresStaleSessionHeader(t *testing.T) {
+	handler1, _, _ := newTestServer(t)
+	staleSessionID := initializeSession(t, handler1)
+
+	handler2, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, staleSessionID)
+	rec := httptest.NewRecorder()
+	handler2.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	newSessionID := rec.Header().Get(sessionHeader)
+	if newSessionID == "" {
+		t.Fatal("missing new session header")
+	}
+	if newSessionID == staleSessionID {
+		t.Fatalf("expected new session id, got stale one %q", newSessionID)
+	}
+}
+
 func TestOriginRejectedWhenNotAllowed(t *testing.T) {
 	handler, _, _ := newTestServer(t)
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":13,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}`))

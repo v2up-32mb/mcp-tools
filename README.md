@@ -20,6 +20,7 @@
 - **SSE / Streamable HTTP 模式**
   - `POST /mcp` + `Accept: text/event-stream`：单次 SSE 响应
   - `GET /mcp` + `Accept: text/event-stream`：按 session 建立长连接事件流
+  - 如果服务重启导致旧 `Mcp-Session-Id` 已失效，服务端会把这类 stream 请求按“未初始化 session”处理并提示重新 initialize，而不是直接返回 `invalid or expired session`
   - 当某个 session 已有活动 SSE stream 时，后续 `POST /mcp` + `Accept: text/event-stream` 会把结果**异步投递**到该 stream，并返回 `202 Accepted`
   - 异步投递同样覆盖 `tools/*`、`resources/*`、`prompts/*`
 - **文件工具**
@@ -386,6 +387,7 @@ data: {"jsonrpc":"2.0","id":1,"result":{...}}
 
 - 先 `initialize` 获取 `Mcp-Session-Id`
 - 再用 `GET /mcp` + `Accept: text/event-stream` + `Mcp-Session-Id` 打开 session 事件流
+- 如果服务重启后客户端还带着旧 session 来开 stream，服务端会返回“需要重新 initialize”的提示，便于客户端在同一轮重连逻辑里丢弃旧 session 并重建
 - 当该 session 已有活动 stream 时，后续 `POST /mcp` + `Accept: text/event-stream` 不再直接回包结果，而是：
   - HTTP 返回 `202 Accepted`
   - 真正的 JSON-RPC 结果异步写入 SSE stream

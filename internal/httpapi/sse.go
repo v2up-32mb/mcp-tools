@@ -488,8 +488,18 @@ func (s *Server) buildStreamResponse(r *http.Request, req rpcRequest, sessionID 
 }
 
 func (s *Server) handleSSEStream(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.requireSession(w, r, nil)
+	sessionID := strings.TrimSpace(r.Header.Get(sessionHeader))
+	if sessionID == "" {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "GET stream requires an initialized session"})
+		return
+	}
+	sess, ok := s.lookupSession(sessionID)
 	if !ok {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "GET stream requires an initialized session"})
+		return
+	}
+	if err := validateRequestedProtocolAgainstSession(r, sess); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "protocol version does not match session", "expected": sess.ProtocolVersion})
 		return
 	}
 	sw, ok := newSSEWriter(w)

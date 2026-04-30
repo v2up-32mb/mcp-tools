@@ -61,6 +61,7 @@ data: {jsonrpc response or notification}
 行为：
 
 - 仅允许在 session 已初始化后建立
+- 如果服务重启导致旧 `Mcp-Session-Id` 已失效，`GET /mcp` 会按“未初始化 session”处理并返回重新 initialize 的提示，而不是返回 `invalid or expired session`
 - 打开后会先发送 `: stream opened`
 - 会周期性发送 `: heartbeat`
 - 已有活动 stream 的 session，再发 `POST /mcp` + SSE Accept 时，结果会异步投递到该 stream，HTTP 只返回 `202 Accepted`
