@@ -7,7 +7,7 @@
 - `AGENTS.md`：给 AI 代理/人工调用方的使用与边界说明
 - `TOOLS-DEFINE.md`：给维护者的内部工具实现算法与约束说明
 - `CHANGELOG.md`：版本变更记录
-- `docs/releases/v0.1.0.md`：`v0.1.0` 发布说明
+- `docs/releases/v1.0.0.md`：`v1.0.0` 发布说明
 
 ## 已实现能力
 
@@ -135,21 +135,38 @@ Authorization: Bearer <token>
 - `127.0.0.1:8080`：只本机可连，推荐本地测试默认用这个
 - `0.0.0.0:8080`：所有网卡都监听，适合远程 agent 接入，但风险更高
 
-#### `debug_http_log`
+#### `log_level`
 
-用于排查 MCP 客户端接入问题。
+控制台日志级别，默认：
 
-开启后，服务端会打印**脱敏**的 HTTP/MCP 调试日志，例如：
+```yaml
+log_level: INFO
+```
 
-- 请求方法、路径、Accept、Origin
-- 是否带 `Authorization`
-- `Authorization` 的 scheme（例如 `Bearer`）
-- 是否带 session header
-- `MCP-Protocol-Version`
-- 解码后的 JSON-RPC method
-- 被拒绝的原因（例如缺 token、协议版本不支持）
+可选值：
+
+- `INFO`
+- `WARN`
+- `ERROR`
+- `DEBUG`
+
+行为：
+
+- `INFO`
+  - 服务启动/停止
+  - 成功工具调用
+  - 重要运行状态
+- `WARN`
+  - 非致命异常
+- `ERROR`
+  - 工具失败
+  - 关键服务错误
+- `DEBUG`
+  - 脱敏的 HTTP/MCP 调试细节
+  - 更完整的请求/协议字段
 
 不会打印完整 Bearer Token。
+`INFO/WARN` 默认不带 `request_id` / `session_id`；`ERROR/DEBUG` 才会带追踪字段。
 
 #### `allowed_roots`
 
@@ -225,9 +242,11 @@ allowed_origins:
 - `listen_addr`
 - `bearer_token`
 - `allowed_roots`
-- `debug_http_log`
+- `log_level`
 - `allowed_origins`
 - `audit_log_path`
+- `audit_rotate_max_mb`
+- `audit_rotate_max_backups`
 - `command_timeout_sec`
 - `output_max_bytes`
 - `stream_queue_size`
@@ -252,6 +271,10 @@ allowed_origins:
   - Linux / macOS：`~/.mcp-tools/mcp-audit.jsonl`
   - Windows：`%USERPROFILE%\\.mcp-tools\\mcp-audit.jsonl`
 - `audit.NewJSONLWriter` 会自动创建缺失的父目录
+- 审计日志支持按大小滚动：
+  - `audit_rotate_max_mb`
+  - `audit_rotate_max_backups`
+  - 轮转文件名形如 `mcp-audit.jsonl.1`、`mcp-audit.jsonl.2`
 - `allowed_origins` 是浏览器 `Origin` 白名单；**不是 hostname 入站控制**
 - `git.allowed_subcommands` 只能配置当前实现支持的白名单子命令，**不支持 `push`**
 - `exec.presets.<name>.enabled: false` 可禁用内置 preset
@@ -303,13 +326,15 @@ go run ./cmd/mcp-tools
 
 - `MCP_CONFIG_FILE`：显式指定 YAML 配置文件路径；若未设置则会尝试默认 home 配置文件
 - `MCP_BEARER_TOKEN`：Bearer Token；若 YAML 未配置则必填
-- `MCP_DEBUG_HTTP_LOG`：是否开启脱敏的 HTTP/MCP 调试日志，支持 `true/false`
+- `MCP_LOG_LEVEL`：控制台日志级别，支持 `INFO/WARN/ERROR/DEBUG`
 - `MCP_LISTEN_ADDR`：默认 `0.0.0.0:8080`
 - `MCP_ALLOWED_ROOTS`：逗号分隔的额外允许目录
 - `MCP_ALLOWED_ORIGINS`：逗号分隔的允许浏览器来源
 - `MCP_AUDIT_LOG_PATH`：默认：
   - Linux / macOS：`~/.mcp-tools/mcp-audit.jsonl`
   - Windows：`%USERPROFILE%\\.mcp-tools\\mcp-audit.jsonl`
+- `MCP_AUDIT_ROTATE_MAX_MB`：审计日志滚动大小阈值（MiB），默认 `10`
+- `MCP_AUDIT_ROTATE_MAX_BACKUPS`：审计日志最多保留的旧文件数，默认 `5`
 - `MCP_COMMAND_TIMEOUT_SEC`：默认 `30`
 - `MCP_OUTPUT_MAX_BYTES`：默认 `65536`
 - `MCP_STREAM_QUEUE_SIZE`：单个 SSE stream 的内部队列容量，默认 `128`
@@ -320,7 +345,7 @@ go run ./cmd/mcp-tools
 - `MCP_IDLE_TIMEOUT_SEC`：默认 `60`
 - `MCP_SESSION_TTL_MIN`：默认 `120`
 - `MCP_SERVER_NAME`：默认 `mcp-tools`
-- `MCP_SERVER_VERSION`：默认 `0.1.0`
+- `MCP_SERVER_VERSION`：默认 `1.0.0`
 
 ## 传输层说明
 

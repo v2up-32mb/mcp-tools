@@ -265,6 +265,22 @@ data: {jsonrpc response or notification}
 - exit code
 - 成功/失败
 
+审计日志默认写到：
+
+- Linux / macOS：`~/.mcp-tools/mcp-audit.jsonl`
+- Windows：`%USERPROFILE%\\.mcp-tools\\mcp-audit.jsonl`
+
+当前支持按大小滚动：
+
+- `audit_rotate_max_mb`
+- `audit_rotate_max_backups`
+
+轮转文件命名形如：
+
+- `mcp-audit.jsonl.1`
+- `mcp-audit.jsonl.2`
+- ...
+
 ### 6.4 资源通知
 
 当前会在以下文件修改型工具成功后发送：
@@ -304,6 +320,45 @@ data: {jsonrpc response or notification}
 - async stream 投递次数 / 成功次数 / fallback 次数
 - `notifications/resources/updated` 的投递/丢弃计数
 - `exec_presets` / `command_templates` 的元信息摘要（含 `env_keys`）
+
+### 6.6 控制台日志
+
+当前服务使用统一应用 logger，不再单独维护 `debug_http_log` 开关。
+
+相关配置：
+
+- `log_level`
+  - `INFO`（默认）
+  - `WARN`
+  - `ERROR`
+  - `DEBUG`
+
+当前语义：
+
+- `INFO`
+  - 服务启动/停止
+  - 成功工具调用
+  - 重要运行状态
+- `WARN`
+  - 非致命异常
+- `ERROR`
+  - 工具失败
+  - 关键服务错误
+- `DEBUG`
+  - HTTP/MCP 请求生命周期
+  - 脱敏后的协议调试字段
+
+控制台日志是**给运行中的人读的**，不是第二份审计日志，因此：
+
+- `INFO/WARN` 默认不带 `request_id` / `session_id`
+- `ERROR/DEBUG` 才会带追踪字段
+- 工具调用默认会显示：
+  - `tool`
+  - 主要参数摘要
+  - `status`
+  - `duration_ms`
+  - `result_digest`
+- 大字段（如 `content` / `new_text` / `diff`）只显示摘要，不直接打印完整内容
 
 ---
 

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/example/mcp-tools/internal/applog"
 	"github.com/example/mcp-tools/internal/audit"
 	"github.com/example/mcp-tools/internal/config"
 	"github.com/example/mcp-tools/internal/httpapi"
@@ -25,7 +25,9 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		log.Fatalf("server error: %v", err)
+		logger := applog.NewDefaultStderr("ERROR")
+		logger.Error("mcp.server", "server startup failed", applog.Field{Key: "error", Value: err.Error()})
+		os.Exit(1)
 	}
 }
 
@@ -38,11 +40,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	applog.SetDefault(applog.NewDefaultStderr(cfg.LogLevel))
 	if *validateConfigOnly {
 		return printConfigSummary(cfg)
 	}
 
-	auditor, err := audit.NewJSONLWriter(cfg.AuditLogPath)
+	auditor, err := audit.NewJSONLWriterWithOptions(cfg.AuditLogPath, audit.RotateOptions{
+		MaxSizeBytes: int64(cfg.AuditRotateMaxMB) * 1024 * 1024,
+		MaxBackups:   cfg.AuditRotateMaxBackups,
+	})
 	if err != nil {
 		return err
 	}
@@ -73,41 +79,49 @@ func run() error {
 
 	go func() {
 		<-shutdownSignal()
+		applog.Default().Info("mcp.server", "shutdown requested")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(ctx)
 	}()
 
-	log.Printf("listening on %s", cfg.ListenAddr)
+	applog.Default().Info("mcp.server", "server listening",
+		applog.Field{Key: "listen_addr", Value: cfg.ListenAddr},
+		applog.Field{Key: "log_level", Value: cfg.LogLevel},
+		applog.Field{Key: "audit_log_path", Value: cfg.AuditLogPath},
+	)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
+	applog.Default().Info("mcp.server", "server stopped")
 	return nil
 }
 
 func printConfigSummary(cfg config.Config) error {
 	summary := map[string]any{
-		"listen_addr":          cfg.ListenAddr,
-		"debug_http_log":       cfg.DebugHTTPLog,
-		"allowed_roots":        cfg.AllowedRoots,
-		"allowed_origins":      cfg.AllowedOrigins,
-		"audit_log_path":       cfg.AuditLogPath,
-		"command_timeout_sec":  int(cfg.CommandTimeout / time.Second),
-		"output_max_bytes":     cfg.OutputMaxBytes,
-		"stream_queue_size":    cfg.StreamQueueSize,
-		"max_request_bytes":    cfg.MaxRequestBytes,
-		"read_header_timeout":  int(cfg.ReadHeaderTimeout / time.Second),
-		"read_timeout":         int(cfg.ReadTimeout / time.Second),
-		"write_timeout":        int(cfg.WriteTimeout / time.Second),
-		"idle_timeout":         int(cfg.IdleTimeout / time.Second),
-		"session_ttl_min":      int(cfg.SessionTTL / time.Minute),
-		"server_name":          cfg.ServerName,
-		"server_version":       cfg.ServerVersion,
-		"supported_protocols":  cfg.SupportedProtocols,
-		"git_allowed":          sortedTrueKeys(cfg.GitAllowed),
-		"exec_presets":         sortedPresetNames(cfg.ExecPresets),
-		"command_templates":    sortedTemplateNames(cfg.CommandTemplates),
-		"bearer_token_present": cfg.BearerToken != "",
+		"listen_addr":              cfg.ListenAddr,
+		"log_level":                cfg.LogLevel,
+		"allowed_roots":            cfg.AllowedRoots,
+		"allowed_origins":          cfg.AllowedOrigins,
+		"audit_log_path":           cfg.AuditLogPath,
+		"audit_rotate_max_mb":      cfg.AuditRotateMaxMB,
+		"audit_rotate_max_backups": cfg.AuditRotateMaxBackups,
+		"command_timeout_sec":      int(cfg.CommandTimeout / time.Second),
+		"output_max_bytes":         cfg.OutputMaxBytes,
+		"stream_queue_size":        cfg.StreamQueueSize,
+		"max_request_bytes":        cfg.MaxRequestBytes,
+		"read_header_timeout":      int(cfg.ReadHeaderTimeout / time.Second),
+		"read_timeout":             int(cfg.ReadTimeout / time.Second),
+		"write_timeout":            int(cfg.WriteTimeout / time.Second),
+		"idle_timeout":             int(cfg.IdleTimeout / time.Second),
+		"session_ttl_min":          int(cfg.SessionTTL / time.Minute),
+		"server_name":              cfg.ServerName,
+		"server_version":           cfg.ServerVersion,
+		"supported_protocols":      cfg.SupportedProtocols,
+		"git_allowed":              sortedTrueKeys(cfg.GitAllowed),
+		"exec_presets":             sortedPresetNames(cfg.ExecPresets),
+		"command_templates":        sortedTemplateNames(cfg.CommandTemplates),
+		"bearer_token_present":     cfg.BearerToken != "",
 	}
 	encoded, err := json.MarshalIndent(summary, "", "  ")
 	if err != nil {

@@ -1,15 +1,12 @@
 package httpapi
 
 import (
-	"encoding/json"
-	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
-)
 
-var debugHTTPLogger = log.New(os.Stderr, "mcp-debug ", log.LstdFlags)
+	"github.com/example/mcp-tools/internal/applog"
+)
 
 type debugResponseRecorder struct {
 	http.ResponseWriter
@@ -50,23 +47,16 @@ func (s *Server) wrapDebugResponseWriter(w http.ResponseWriter) *debugResponseRe
 }
 
 func (s *Server) debugEnabled() bool {
-	return s.cfg.DebugHTTPLog
+	return strings.EqualFold(s.cfg.LogLevel, "DEBUG")
 }
 
 func (s *Server) debugLog(event string, fields map[string]any) {
 	if !s.debugEnabled() {
 		return
 	}
-	payload := map[string]any{"event": event}
-	for k, v := range fields {
-		payload[k] = v
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		debugHTTPLogger.Printf(`{"event":"debug_log_marshal_failed","error":%q}` , err.Error())
-		return
-	}
-	debugHTTPLogger.Print(string(encoded))
+	allFields := []applog.Field{{Key: "event", Value: event}}
+	allFields = append(allFields, debugMapFields(fields)...)
+	applog.Default().Debug("mcp.http", debugMessage(event), allFields...)
 }
 
 func (s *Server) debugRequestFields(r *http.Request) map[string]any {
@@ -88,8 +78,8 @@ func (s *Server) debugRequestFields(r *http.Request) map[string]any {
 
 func (s *Server) debugRPCFields(req rpcRequest) map[string]any {
 	fields := map[string]any{
-		"rpc_jsonrpc":   req.JSONRPC,
-		"rpc_method":    req.Method,
+		"rpc_jsonrpc":    req.JSONRPC,
+		"rpc_method":     req.Method,
 		"rpc_id_present": req.ID != nil,
 	}
 	if req.Method == "initialize" {
@@ -147,4 +137,64 @@ func copyDebugFields(fields map[string]any) map[string]any {
 		copied[k] = v
 	}
 	return copied
+}
+
+func debugMessage(event string) string {
+	switch event {
+	case "http_request_received":
+		return "http request received"
+	case "mcp_request_rejected":
+		return "mcp request rejected"
+	case "http_request_completed":
+		return "http request completed"
+	default:
+		return strings.ReplaceAll(event, "_", " ")
+	}
+}
+
+func debugMapFields(values map[string]any) []applog.Field {
+	order := []string{
+		"event",
+		"handler",
+		"remote_addr",
+		"http_method",
+		"path",
+		"content_type",
+		"accept",
+		"origin",
+		"authorization_present",
+		"authorization_scheme",
+		"session_header_present",
+		"protocol_header",
+		"request_id",
+		"rpc_jsonrpc",
+		"rpc_method",
+		"rpc_id_present",
+		"tool_name",
+		"initialize_requested_protocol",
+		"http_status",
+		"rpc_error_code",
+		"rpc_error_message",
+		"expected_protocol",
+		"supported_protocols",
+		"transport",
+		"duration_ms",
+	}
+	fields := make([]applog.Field, 0, len(values))
+	seen := make(map[string]bool, len(order))
+	for _, key := range order {
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+		fields = append(fields, applog.Field{Key: key, Value: value})
+		seen[key] = true
+	}
+	for key, value := range values {
+		if seen[key] {
+			continue
+		}
+		fields = append(fields, applog.Field{Key: key, Value: value})
+	}
+	return fields
 }

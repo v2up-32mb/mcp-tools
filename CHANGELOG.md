@@ -6,7 +6,19 @@
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-04-30
+
 ### Added
+- 新增统一控制台应用日志：
+  - `DEBUG`
+  - `INFO`
+  - `WARN`
+  - `ERROR`
+- 成功工具调用现在会记录高可读性的 `INFO` 控制台日志，并输出工具名、主要参数摘要、耗时与结果摘要。
+- 新增审计日志按大小滚动能力：
+  - `audit_rotate_max_mb`
+  - `audit_rotate_max_backups`
+- 新增 `internal/applog` 统一日志底座，用于服务启动/停止、工具调用与 HTTP/MCP 调试日志输出。
 - 新增 Go-only 导航工具：
   - `go.list_symbols`
   - `go.find_definition`
@@ -19,6 +31,7 @@
 - 所有 Go preset 现在会把 `GOCACHE` / `GOMODCACHE` / `GOTMPDIR` 固定到 `~/.mcp-tools/cache` 下，降低依赖下载和构建缓存对外部目录的污染。
 
 ### Fixed
+- 移除独立 `debug_http_log` 开关，统一改由 `log_level=DEBUG` 控制脱敏 HTTP/MCP 调试日志。
 - 恢复项目 Go 基线到 `go 1.20`，并将 `golang.org/x/tools` / `golang.org/x/mod` / `golang.org/x/sync` 依赖链回退到与 Windows 7 目标场景一致的兼容版本。
 - 调整 `GET /mcp` 的 stale-session 处理：服务重启后若客户端仍带旧 `Mcp-Session-Id` 开 stream，服务端现在按“未初始化 session”返回重连提示，避免首个重连动作直接落成 `invalid or expired session`。
 - 加固路径解析，修复 symlink 与多级缺失路径组合下的允许目录绕过风险。

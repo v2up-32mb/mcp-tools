@@ -14,8 +14,9 @@
 listen_addr: 127.0.0.1:8080
 bearer_token: change-me
 
-# 调试客户端接入问题时可以临时打开。
-debug_http_log: false
+# 控制台日志级别。
+# 调试 HTTP/MCP 细节时可临时改成 DEBUG。
+log_level: INFO
 
 # 额外允许目录。
 # 服务启动目录和 ~/.mcp-tools 会自动加入白名单。
@@ -25,6 +26,8 @@ allowed_roots:
 # 审计日志默认会写到：
 #   - Linux / macOS: ~/.mcp-tools/mcp-audit.jsonl
 #   - Windows:       %USERPROFILE%\\.mcp-tools\\mcp-audit.jsonl
+audit_rotate_max_mb: 10
+audit_rotate_max_backups: 5
 
 # 如果你不是浏览器页面接入，这里可以先不配。
 # allowed_origins:

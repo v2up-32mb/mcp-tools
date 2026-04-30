@@ -33,28 +33,30 @@ var knownGitSubcommands = map[string]bool{
 }
 
 type Config struct {
-	ListenAddr         string
-	BearerToken        string
-	DebugHTTPLog       bool
-	AllowedRoots       []string
-	AllowedOrigins     []string
-	AuditLogPath       string
-	CommandTimeout     time.Duration
-	OutputMaxBytes     int
-	StreamQueueSize    int
-	MaxRequestBytes    int64
-	ReadHeaderTimeout  time.Duration
-	ReadTimeout        time.Duration
-	WriteTimeout       time.Duration
-	IdleTimeout        time.Duration
-	GitAllowed         map[string]bool
-	ExecPresets        map[string]ExecPreset
-	CommandTemplates   map[string]CommandTemplate
-	StartupDirectory   string
-	SessionTTL         time.Duration
-	ServerName         string
-	ServerVersion      string
-	SupportedProtocols []string
+	ListenAddr            string
+	BearerToken           string
+	LogLevel              string
+	AllowedRoots          []string
+	AllowedOrigins        []string
+	AuditLogPath          string
+	AuditRotateMaxMB      int
+	AuditRotateMaxBackups int
+	CommandTimeout        time.Duration
+	OutputMaxBytes        int
+	StreamQueueSize       int
+	MaxRequestBytes       int64
+	ReadHeaderTimeout     time.Duration
+	ReadTimeout           time.Duration
+	WriteTimeout          time.Duration
+	IdleTimeout           time.Duration
+	GitAllowed            map[string]bool
+	ExecPresets           map[string]ExecPreset
+	CommandTemplates      map[string]CommandTemplate
+	StartupDirectory      string
+	SessionTTL            time.Duration
+	ServerName            string
+	ServerVersion         string
+	SupportedProtocols    []string
 }
 
 type ExecPreset struct {
@@ -83,26 +85,28 @@ type LoadOptions struct {
 }
 
 type fileConfig struct {
-	ListenAddr           string         `yaml:"listen_addr"`
-	BearerToken          string         `yaml:"bearer_token"`
-	DebugHTTPLog         *bool          `yaml:"debug_http_log"`
-	AllowedRoots         []string       `yaml:"allowed_roots"`
-	AllowedOrigins       []string       `yaml:"allowed_origins"`
-	AuditLogPath         string         `yaml:"audit_log_path"`
-	CommandTimeoutSec    *int           `yaml:"command_timeout_sec"`
-	OutputMaxBytes       *int           `yaml:"output_max_bytes"`
-	StreamQueueSize      *int           `yaml:"stream_queue_size"`
-	MaxRequestBytes      *int64         `yaml:"max_request_bytes"`
-	ReadHeaderTimeoutSec *int           `yaml:"read_header_timeout_sec"`
-	ReadTimeoutSec       *int           `yaml:"read_timeout_sec"`
-	WriteTimeoutSec      *int           `yaml:"write_timeout_sec"`
-	IdleTimeoutSec       *int           `yaml:"idle_timeout_sec"`
-	SessionTTLMin        *int           `yaml:"session_ttl_min"`
-	ServerName           string         `yaml:"server_name"`
-	ServerVersion        string         `yaml:"server_version"`
-	SupportedProtocols   []string       `yaml:"supported_protocols"`
-	Git                  fileGitConfig  `yaml:"git"`
-	Exec                 fileExecConfig `yaml:"exec"`
+	ListenAddr            string         `yaml:"listen_addr"`
+	BearerToken           string         `yaml:"bearer_token"`
+	LogLevel              string         `yaml:"log_level"`
+	AllowedRoots          []string       `yaml:"allowed_roots"`
+	AllowedOrigins        []string       `yaml:"allowed_origins"`
+	AuditLogPath          string         `yaml:"audit_log_path"`
+	AuditRotateMaxMB      *int           `yaml:"audit_rotate_max_mb"`
+	AuditRotateMaxBackups *int           `yaml:"audit_rotate_max_backups"`
+	CommandTimeoutSec     *int           `yaml:"command_timeout_sec"`
+	OutputMaxBytes        *int           `yaml:"output_max_bytes"`
+	StreamQueueSize       *int           `yaml:"stream_queue_size"`
+	MaxRequestBytes       *int64         `yaml:"max_request_bytes"`
+	ReadHeaderTimeoutSec  *int           `yaml:"read_header_timeout_sec"`
+	ReadTimeoutSec        *int           `yaml:"read_timeout_sec"`
+	WriteTimeoutSec       *int           `yaml:"write_timeout_sec"`
+	IdleTimeoutSec        *int           `yaml:"idle_timeout_sec"`
+	SessionTTLMin         *int           `yaml:"session_ttl_min"`
+	ServerName            string         `yaml:"server_name"`
+	ServerVersion         string         `yaml:"server_version"`
+	SupportedProtocols    []string       `yaml:"supported_protocols"`
+	Git                   fileGitConfig  `yaml:"git"`
+	Exec                  fileExecConfig `yaml:"exec"`
 }
 
 type fileGitConfig struct {
@@ -187,25 +191,28 @@ func LoadWithOptions(opts LoadOptions) (Config, error) {
 func defaultConfig(cwd string) Config {
 	timeout := 30 * time.Second
 	return Config{
-		ListenAddr:         "0.0.0.0:8080",
-		AllowedRoots:       defaultAllowedRoots(cwd),
-		AuditLogPath:       defaultAuditLogPath(cwd),
-		CommandTimeout:     timeout,
-		OutputMaxBytes:     65536,
-		StreamQueueSize:    128,
-		MaxRequestBytes:    1 << 20,
-		ReadHeaderTimeout:  5 * time.Second,
-		ReadTimeout:        15 * time.Second,
-		WriteTimeout:       30 * time.Second,
-		IdleTimeout:        60 * time.Second,
-		GitAllowed:         defaultGitAllowed(),
-		ExecPresets:        defaultExecPresets(timeout),
-		CommandTemplates:   defaultCommandTemplates(timeout),
-		StartupDirectory:   cwd,
-		SessionTTL:         120 * time.Minute,
-		ServerName:         "mcp-tools",
-		ServerVersion:      "0.1.0",
-		SupportedProtocols: []string{ProtocolLatest, ProtocolCompat, ProtocolLegacy, ProtocolOld},
+		ListenAddr:            "0.0.0.0:8080",
+		LogLevel:              "INFO",
+		AllowedRoots:          defaultAllowedRoots(cwd),
+		AuditLogPath:          defaultAuditLogPath(cwd),
+		AuditRotateMaxMB:      10,
+		AuditRotateMaxBackups: 5,
+		CommandTimeout:        timeout,
+		OutputMaxBytes:        65536,
+		StreamQueueSize:       128,
+		MaxRequestBytes:       1 << 20,
+		ReadHeaderTimeout:     5 * time.Second,
+		ReadTimeout:           15 * time.Second,
+		WriteTimeout:          30 * time.Second,
+		IdleTimeout:           60 * time.Second,
+		GitAllowed:            defaultGitAllowed(),
+		ExecPresets:           defaultExecPresets(timeout),
+		CommandTemplates:      defaultCommandTemplates(timeout),
+		StartupDirectory:      cwd,
+		SessionTTL:            120 * time.Minute,
+		ServerName:            "mcp-tools",
+		ServerVersion:         "1.0.0",
+		SupportedProtocols:    []string{ProtocolLatest, ProtocolCompat, ProtocolLegacy, ProtocolOld},
 	}
 }
 
@@ -225,8 +232,8 @@ func applyYAMLFile(cfg *Config, path string) error {
 	if fc.BearerToken != "" {
 		cfg.BearerToken = fc.BearerToken
 	}
-	if fc.DebugHTTPLog != nil {
-		cfg.DebugHTTPLog = *fc.DebugHTTPLog
+	if strings.TrimSpace(fc.LogLevel) != "" {
+		cfg.LogLevel = normalizeLogLevel(fc.LogLevel)
 	}
 	if len(fc.AllowedRoots) > 0 {
 		roots, err := resolvePathList(fc.AllowedRoots, baseDir)
@@ -240,6 +247,12 @@ func applyYAMLFile(cfg *Config, path string) error {
 	}
 	if fc.AuditLogPath != "" {
 		cfg.AuditLogPath = resolveMaybeRelative(baseDir, fc.AuditLogPath)
+	}
+	if fc.AuditRotateMaxMB != nil {
+		cfg.AuditRotateMaxMB = *fc.AuditRotateMaxMB
+	}
+	if fc.AuditRotateMaxBackups != nil {
+		cfg.AuditRotateMaxBackups = *fc.AuditRotateMaxBackups
 	}
 	if fc.CommandTimeoutSec != nil {
 		cfg.CommandTimeout = time.Duration(*fc.CommandTimeoutSec) * time.Second
@@ -307,12 +320,8 @@ func applyEnv(cfg *Config, cwd string) error {
 	if value := os.Getenv("MCP_LISTEN_ADDR"); value != "" {
 		cfg.ListenAddr = value
 	}
-	if value := os.Getenv("MCP_DEBUG_HTTP_LOG"); value != "" {
-		parsed, err := strconv.ParseBool(value)
-		if err != nil {
-			return fmt.Errorf("invalid MCP_DEBUG_HTTP_LOG")
-		}
-		cfg.DebugHTTPLog = parsed
+	if value := os.Getenv("MCP_LOG_LEVEL"); value != "" {
+		cfg.LogLevel = normalizeLogLevel(value)
 	}
 	if value := os.Getenv("MCP_ALLOWED_ROOTS"); value != "" {
 		roots, err := resolvePathList(splitCSV(value), cwd)
@@ -326,6 +335,20 @@ func applyEnv(cfg *Config, cwd string) error {
 	}
 	if value := os.Getenv("MCP_AUDIT_LOG_PATH"); value != "" {
 		cfg.AuditLogPath = resolveMaybeRelative(cwd, value)
+	}
+	if value := os.Getenv("MCP_AUDIT_ROTATE_MAX_MB"); value != "" {
+		parsed, err := parseNonNegativeInt(value, "MCP_AUDIT_ROTATE_MAX_MB")
+		if err != nil {
+			return err
+		}
+		cfg.AuditRotateMaxMB = parsed
+	}
+	if value := os.Getenv("MCP_AUDIT_ROTATE_MAX_BACKUPS"); value != "" {
+		parsed, err := parseNonNegativeInt(value, "MCP_AUDIT_ROTATE_MAX_BACKUPS")
+		if err != nil {
+			return err
+		}
+		cfg.AuditRotateMaxBackups = parsed
 	}
 	if value := os.Getenv("MCP_OUTPUT_MAX_BYTES"); value != "" {
 		parsed, err := parsePositiveInt(value, "MCP_OUTPUT_MAX_BYTES")
@@ -616,8 +639,17 @@ func validateConfig(cfg Config) error {
 	if strings.TrimSpace(cfg.BearerToken) == "" {
 		return errors.New("MCP_BEARER_TOKEN required (or bearer_token in YAML)")
 	}
+	if !isValidLogLevel(cfg.LogLevel) {
+		return fmt.Errorf("log_level %q not supported", cfg.LogLevel)
+	}
 	if strings.TrimSpace(cfg.ListenAddr) == "" {
 		return errors.New("listen_addr required")
+	}
+	if cfg.AuditRotateMaxMB < 0 {
+		return errors.New("audit_rotate_max_mb must be non-negative")
+	}
+	if cfg.AuditRotateMaxMB > 0 && cfg.AuditRotateMaxBackups <= 0 {
+		return errors.New("audit_rotate_max_backups must be positive when audit rotation is enabled")
 	}
 	if cfg.OutputMaxBytes <= 0 {
 		return errors.New("output_max_bytes must be positive")
@@ -823,6 +855,27 @@ func parsePositiveInt(raw, name string) (int, error) {
 		return 0, fmt.Errorf("invalid %s", name)
 	}
 	return value, nil
+}
+
+func parseNonNegativeInt(raw, name string) (int, error) {
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("invalid %s", name)
+	}
+	return value, nil
+}
+
+func normalizeLogLevel(value string) string {
+	return strings.ToUpper(strings.TrimSpace(value))
+}
+
+func isValidLogLevel(value string) bool {
+	switch normalizeLogLevel(value) {
+	case "DEBUG", "INFO", "WARN", "ERROR":
+		return true
+	default:
+		return false
+	}
 }
 
 func cloneStrings(values []string) []string {

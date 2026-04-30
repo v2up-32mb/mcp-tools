@@ -29,16 +29,12 @@ listen_addr: 127.0.0.1:8080
 #   Authorization: Bearer <token>
 bearer_token: change-me
 
-# 是否开启 HTTP / MCP 调试日志。
-#
-# 开启后会打印：
-# - 请求方法、路径、Accept、Origin
-# - 是否携带 Authorization / 使用的认证 scheme
-# - 解码后的 JSON-RPC method
-# - 协议版本不匹配、缺少 token 等拒绝原因
-#
-# 不会打印完整 Bearer Token。
-debug_http_log: false
+# 控制台日志级别：
+# - INFO  : 默认，显示服务启动/停止、成功工具调用、重要运行状态
+# - WARN  : 只看警告与错误
+# - ERROR : 只看错误
+# - DEBUG : 展开 HTTP/MCP 调试细节与更多字段
+log_level: INFO
 
 # 额外允许的工作区目录。
 # 注意：
@@ -75,6 +71,15 @@ allowed_roots:
 # 只有你想显式覆盖默认位置时才需要取消注释：
 # audit_log_path: /absolute/path/to/mcp-audit.jsonl
 
+# 审计日志滚动：
+# - audit_rotate_max_mb <= 0 表示不滚动
+# - audit_rotate_max_backups 控制保留多少个旧文件
+# - 轮转文件名形如：
+#   - mcp-audit.jsonl.1
+#   - mcp-audit.jsonl.2
+audit_rotate_max_mb: 10
+audit_rotate_max_backups: 5
+
 # 单次命令默认超时（秒）
 command_timeout_sec: 30
 
@@ -99,7 +104,7 @@ session_ttl_min: 120
 
 # 服务元信息
 server_name: mcp-tools
-server_version: 0.1.0
+server_version: 1.0.0
 
 # 协议版本白名单。通常不需要改。
 supported_protocols:

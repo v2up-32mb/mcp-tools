@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/example/mcp-tools/internal/applog"
 	"github.com/example/mcp-tools/internal/audit"
 )
 
@@ -150,6 +151,7 @@ func (r *Registry) Call(ctx context.Context, callCtx CallContext, name string, a
 		event.Error = toolErr.Error()
 		event.ResultDigest = toolErr.Audit.ResultDigest
 		_ = r.auditor.Write(event)
+		logToolCallError(callCtx, name, args, event.DurationMS, toolErr)
 		return ErrorResultWithStructured(toolErr.Error(), toolErr.StructuredContent, toolErr.Audit), nil
 	}
 
@@ -163,6 +165,7 @@ func (r *Registry) Call(ctx context.Context, callCtx CallContext, name string, a
 	event.ExitCode = result.Audit.ExitCode
 	event.ResultDigest = result.Audit.ResultDigest
 	_ = r.auditor.Write(event)
+	logToolCallInfo(name, args, event.DurationMS, result.Audit)
 	return normalizeResult(result), nil
 }
 
@@ -263,4 +266,140 @@ func cloneStrings(values []string) []string {
 	out := make([]string, len(values))
 	copy(out, values)
 	return out
+}
+
+func logToolCallInfo(name string, args map[string]any, durationMS int64, auditData AuditData) {
+	fields := summarizeToolFields(name, args)
+	fields = append(fields,
+		applog.Field{Key: "status", Value: "ok"},
+		applog.Field{Key: "duration_ms", Value: durationMS},
+	)
+	if summary := firstNonEmpty(auditData.ResultDigest, summarizeArgs(name, args)); summary != "" {
+		fields = append(fields, applog.Field{Key: "result_digest", Value: summary})
+	}
+	applog.Default().Info("mcp.tool", "tool call completed", fields...)
+}
+
+func logToolCallError(callCtx CallContext, name string, args map[string]any, durationMS int64, toolErr *ToolError) {
+	fields := summarizeToolFields(name, args)
+	fields = append(fields,
+		applog.Field{Key: "status", Value: "error"},
+		applog.Field{Key: "duration_ms", Value: durationMS},
+	)
+	if strings.TrimSpace(callCtx.RequestID) != "" {
+		fields = append(fields, applog.Field{Key: "request_id", Value: callCtx.RequestID})
+	}
+	if strings.TrimSpace(callCtx.SessionID) != "" {
+		fields = append(fields, applog.Field{Key: "session_id", Value: callCtx.SessionID})
+	}
+	fields = append(fields, applog.Field{Key: "error", Value: toolErr.Error()})
+	applog.Default().Error("mcp.tool", "tool call failed", fields...)
+}
+
+func summarizeToolFields(name string, args map[string]any) []applog.Field {
+	fields := []applog.Field{{Key: "tool", Value: name}}
+	switch {
+	case strings.HasPrefix(name, "fs."):
+		fields = appendPathLikeField(fields, args, "path", "path")
+		fields = appendPathLikeField(fields, args, "target_path", "target_path")
+		fields = appendPathLikeField(fields, args, "uri", "uri")
+		fields = appendLineRangeFields(fields, args)
+		fields = appendLargeFieldSummaries(fields, args)
+	case strings.HasPrefix(name, "git."):
+		fields = appendPathLikeField(fields, args, "repo_path", "repo_path")
+		fields = appendStringField(fields, args, "branch", "branch")
+		fields = appendPathsCountField(fields, args, "paths")
+	case name == "exec.run":
+		fields = appendStringField(fields, args, "preset", "preset")
+		fields = appendPathLikeField(fields, args, "workdir", "workdir")
+		fields = appendArgsCountField(fields, args, "args")
+	case name == "exec.run_template":
+		fields = appendStringField(fields, args, "template", "template")
+		fields = appendPathLikeField(fields, args, "workdir", "workdir")
+	case strings.HasPrefix(name, "go."):
+		fields = appendPathLikeField(fields, args, "path", "path")
+		fields = appendIntField(fields, args, "line", "line")
+		fields = appendIntField(fields, args, "column", "column")
+	}
+	return fields
+}
+
+func appendStringField(fields []applog.Field, args map[string]any, argKey, fieldKey string) []applog.Field {
+	if value, ok := args[argKey].(string); ok && strings.TrimSpace(value) != "" {
+		fields = append(fields, applog.Field{Key: fieldKey, Value: value})
+	}
+	return fields
+}
+
+func appendPathLikeField(fields []applog.Field, args map[string]any, argKey, fieldKey string) []applog.Field {
+	return appendStringField(fields, args, argKey, fieldKey)
+}
+
+func appendIntField(fields []applog.Field, args map[string]any, argKey, fieldKey string) []applog.Field {
+	switch value := args[argKey].(type) {
+	case int:
+		fields = append(fields, applog.Field{Key: fieldKey, Value: value})
+	case int64:
+		fields = append(fields, applog.Field{Key: fieldKey, Value: value})
+	case float64:
+		fields = append(fields, applog.Field{Key: fieldKey, Value: int(value)})
+	}
+	return fields
+}
+
+func appendArgsCountField(fields []applog.Field, args map[string]any, argKey string) []applog.Field {
+	if values, ok := args[argKey].([]any); ok {
+		fields = append(fields, applog.Field{Key: "args_count", Value: len(values)})
+	}
+	return fields
+}
+
+func appendPathsCountField(fields []applog.Field, args map[string]any, argKey string) []applog.Field {
+	if values, ok := args[argKey].([]any); ok {
+		fields = append(fields, applog.Field{Key: "paths_count", Value: len(values)})
+	}
+	return fields
+}
+
+func appendLineRangeFields(fields []applog.Field, args map[string]any) []applog.Field {
+	fields = appendIntField(fields, args, "start_line", "start_line")
+	fields = appendIntField(fields, args, "end_line", "end_line")
+	return fields
+}
+
+func appendLargeFieldSummaries(fields []applog.Field, args map[string]any) []applog.Field {
+	if content, ok := args["content"].(string); ok {
+		fields = append(fields, applog.Field{Key: "content_bytes", Value: len(content)})
+	}
+	if newText, ok := args["new_text"].(string); ok {
+		fields = append(fields, applog.Field{Key: "new_text_lines", Value: lineCount(newText)})
+	}
+	if diff, ok := args["diff"].(string); ok {
+		fields = append(fields, applog.Field{Key: "diff_hunks", Value: countDiffHunks(diff)})
+	}
+	return fields
+}
+
+func lineCount(value string) int {
+	if value == "" {
+		return 0
+	}
+	return strings.Count(value, "\n") + 1
+}
+
+func countDiffHunks(diff string) int {
+	if strings.TrimSpace(diff) == "" {
+		return 0
+	}
+	count := 0
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "@@") {
+			count++
+		}
+	}
+	return count
+}
+
+func summarizeArgs(name string, args map[string]any) string {
+	return fmt.Sprintf("%s call", name)
 }

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/example/mcp-tools/internal/applog"
 	"github.com/example/mcp-tools/internal/audit"
 	"github.com/example/mcp-tools/internal/config"
 	"github.com/example/mcp-tools/internal/mcp"
@@ -30,25 +31,28 @@ func newTestServerWithConfig(t *testing.T, mutate func(*config.Config)) (http.Ha
 	dir := t.TempDir()
 	auditPath := filepath.Join(dir, "audit.jsonl")
 	cfg := config.Config{
-		ListenAddr:         "127.0.0.1:0",
-		BearerToken:        "secret",
-		AllowedRoots:       []string{dir},
-		AuditLogPath:       auditPath,
-		CommandTimeout:     5 * time.Second,
-		OutputMaxBytes:     4096,
-		StreamQueueSize:    128,
-		MaxRequestBytes:    1 << 20,
-		ReadHeaderTimeout:  5 * time.Second,
-		ReadTimeout:        15 * time.Second,
-		WriteTimeout:       30 * time.Second,
-		IdleTimeout:        60 * time.Second,
-		GitAllowed:         map[string]bool{"status": true, "diff": true, "log": true, "add": true, "restore": true, "commit": true, "branch": true, "switch": true, "pull": true},
-		ExecPresets:        map[string]config.ExecPreset{"go_test": {Command: "go", FixedArgs: []string{"test"}, AllowedArgs: []string{"-v"}, Timeout: 5 * time.Second, ReadOnly: true}},
-		StartupDirectory:   dir,
-		SessionTTL:         time.Hour,
-		ServerName:         "mcp-tools-test",
-		ServerVersion:      "test",
-		SupportedProtocols: []string{config.ProtocolLatest, config.ProtocolCompat, config.ProtocolLegacy},
+		ListenAddr:            "127.0.0.1:0",
+		BearerToken:           "secret",
+		LogLevel:              "INFO",
+		AllowedRoots:          []string{dir},
+		AuditLogPath:          auditPath,
+		AuditRotateMaxMB:      10,
+		AuditRotateMaxBackups: 5,
+		CommandTimeout:        5 * time.Second,
+		OutputMaxBytes:        4096,
+		StreamQueueSize:       128,
+		MaxRequestBytes:       1 << 20,
+		ReadHeaderTimeout:     5 * time.Second,
+		ReadTimeout:           15 * time.Second,
+		WriteTimeout:          30 * time.Second,
+		IdleTimeout:           60 * time.Second,
+		GitAllowed:            map[string]bool{"status": true, "diff": true, "log": true, "add": true, "restore": true, "commit": true, "branch": true, "switch": true, "pull": true},
+		ExecPresets:           map[string]config.ExecPreset{"go_test": {Command: "go", FixedArgs: []string{"test"}, AllowedArgs: []string{"-v"}, Timeout: 5 * time.Second, ReadOnly: true}},
+		StartupDirectory:      dir,
+		SessionTTL:            time.Hour,
+		ServerName:            "mcp-tools-test",
+		ServerVersion:         "test",
+		SupportedProtocols:    []string{config.ProtocolLatest, config.ProtocolCompat, config.ProtocolLegacy},
 	}
 	if mutate != nil {
 		mutate(&cfg)
@@ -75,19 +79,13 @@ func newTestServerWithConfig(t *testing.T, mutate func(*config.Config)) (http.Ha
 	return NewServer(cfg, registry), dir, auditPath
 }
 
-func captureDebugHTTPLogs(t *testing.T) *bytes.Buffer {
+func captureDebugLogs(t *testing.T) *bytes.Buffer {
 	t.Helper()
-	oldWriter := debugHTTPLogger.Writer()
-	oldFlags := debugHTTPLogger.Flags()
-	oldPrefix := debugHTTPLogger.Prefix()
 	var buf bytes.Buffer
-	debugHTTPLogger.SetOutput(&buf)
-	debugHTTPLogger.SetFlags(0)
-	debugHTTPLogger.SetPrefix("")
+	old := applog.Default()
+	applog.SetDefault(applog.New(&buf, "DEBUG"))
 	t.Cleanup(func() {
-		debugHTTPLogger.SetOutput(oldWriter)
-		debugHTTPLogger.SetFlags(oldFlags)
-		debugHTTPLogger.SetPrefix(oldPrefix)
+		applog.SetDefault(old)
 	})
 	return &buf
 }
@@ -1198,10 +1196,10 @@ func initializeSession(t *testing.T, handler http.Handler) string {
 	return sessionID
 }
 
-func TestDebugHTTPLogUnsupportedProtocolIncludesRequestedVersion(t *testing.T) {
-	buf := captureDebugHTTPLogs(t)
+func TestDebugLoggingUnsupportedProtocolIncludesRequestedVersion(t *testing.T) {
+	buf := captureDebugLogs(t)
 	handler, _, _ := newTestServerWithConfig(t, func(cfg *config.Config) {
-		cfg.DebugHTTPLog = true
+		cfg.LogLevel = "DEBUG"
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2099-01-01","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
@@ -1212,21 +1210,21 @@ func TestDebugHTTPLogUnsupportedProtocolIncludesRequestedVersion(t *testing.T) {
 		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	logs := buf.String()
-	if !strings.Contains(logs, `"initialize_requested_protocol":"2099-01-01"`) {
+	if !strings.Contains(logs, "initialize_requested_protocol: 2099-01-01") {
 		t.Fatalf("expected requested protocol in logs, got %s", logs)
 	}
-	if !strings.Contains(logs, `"rpc_error_code":-32002`) {
+	if !strings.Contains(logs, "rpc_error_code: -32002") {
 		t.Fatalf("expected rpc error code in logs, got %s", logs)
 	}
-	if !strings.Contains(logs, `"authorization_scheme":"Bearer"`) {
+	if !strings.Contains(logs, "authorization_scheme: Bearer") {
 		t.Fatalf("expected auth scheme in logs, got %s", logs)
 	}
 }
 
-func TestDebugHTTPLogDoesNotLeakBearerToken(t *testing.T) {
-	buf := captureDebugHTTPLogs(t)
+func TestDebugLoggingDoesNotLeakBearerToken(t *testing.T) {
+	buf := captureDebugLogs(t)
 	handler, _, _ := newTestServerWithConfig(t, func(cfg *config.Config) {
-		cfg.DebugHTTPLog = true
+		cfg.LogLevel = "DEBUG"
 		cfg.BearerToken = "super-secret-token"
 	})
 
@@ -1241,10 +1239,10 @@ func TestDebugHTTPLogDoesNotLeakBearerToken(t *testing.T) {
 	if strings.Contains(logs, "super-secret-token") {
 		t.Fatalf("expected logs to redact token, got %s", logs)
 	}
-	if !strings.Contains(logs, `"authorization_present":true`) {
+	if !strings.Contains(logs, "authorization_present: true") {
 		t.Fatalf("expected authorization presence in logs, got %s", logs)
 	}
-	if !strings.Contains(logs, `"authorization_scheme":"Bearer"`) {
+	if !strings.Contains(logs, "authorization_scheme: Bearer") {
 		t.Fatalf("expected bearer scheme in logs, got %s", logs)
 	}
 }

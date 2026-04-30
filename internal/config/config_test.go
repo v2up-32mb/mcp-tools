@@ -16,13 +16,15 @@ func TestLoadWithYAMLAndEnvOverride(t *testing.T) {
 	}
 	content := `listen_addr: 127.0.0.1:9999
 bearer_token: from-yaml
-debug_http_log: true
+log_level: DEBUG
 allowed_roots:
   - ./extra
 allowed_origins:
   - https://ui.example
   - https://ui.example
 audit_log_path: ./logs/audit.jsonl
+audit_rotate_max_mb: 12
+audit_rotate_max_backups: 7
 command_timeout_sec: 41
 output_max_bytes: 1234
 stream_queue_size: 55
@@ -67,11 +69,14 @@ exec:
 	if cfg.BearerToken != "from-env" {
 		t.Fatalf("expected env token, got %q", cfg.BearerToken)
 	}
-	if !cfg.DebugHTTPLog {
-		t.Fatal("expected debug http log from yaml")
+	if cfg.LogLevel != "DEBUG" {
+		t.Fatalf("expected log level DEBUG, got %q", cfg.LogLevel)
 	}
 	if cfg.AuditLogPath != auditPath {
 		t.Fatalf("unexpected audit path: %s", cfg.AuditLogPath)
+	}
+	if cfg.AuditRotateMaxMB != 12 || cfg.AuditRotateMaxBackups != 7 {
+		t.Fatalf("unexpected audit rotation config: mb=%d backups=%d", cfg.AuditRotateMaxMB, cfg.AuditRotateMaxBackups)
 	}
 	if cfg.CommandTimeout != 41*time.Second {
 		t.Fatalf("unexpected timeout: %s", cfg.CommandTimeout)
@@ -149,13 +154,15 @@ func TestLoadRejectsBlockedExecArg(t *testing.T) {
 func TestLoadEnvOverridesServerLimits(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("MCP_BEARER_TOKEN", "env-token")
-	t.Setenv("MCP_DEBUG_HTTP_LOG", "true")
+	t.Setenv("MCP_LOG_LEVEL", "debug")
 	t.Setenv("MCP_MAX_REQUEST_BYTES", "2048")
 	t.Setenv("MCP_STREAM_QUEUE_SIZE", "256")
 	t.Setenv("MCP_READ_HEADER_TIMEOUT_SEC", "7")
 	t.Setenv("MCP_READ_TIMEOUT_SEC", "17")
 	t.Setenv("MCP_WRITE_TIMEOUT_SEC", "27")
 	t.Setenv("MCP_IDLE_TIMEOUT_SEC", "37")
+	t.Setenv("MCP_AUDIT_ROTATE_MAX_MB", "9")
+	t.Setenv("MCP_AUDIT_ROTATE_MAX_BACKUPS", "4")
 
 	cfg, err := LoadWithOptions(LoadOptions{WorkDir: root})
 	if err != nil {
@@ -164,14 +171,29 @@ func TestLoadEnvOverridesServerLimits(t *testing.T) {
 	if cfg.MaxRequestBytes != 2048 {
 		t.Fatalf("unexpected MaxRequestBytes: %d", cfg.MaxRequestBytes)
 	}
-	if !cfg.DebugHTTPLog {
-		t.Fatal("expected debug http log env override")
+	if cfg.LogLevel != "DEBUG" {
+		t.Fatalf("expected DEBUG log level from env override, got %q", cfg.LogLevel)
 	}
 	if cfg.StreamQueueSize != 256 {
 		t.Fatalf("unexpected StreamQueueSize: %d", cfg.StreamQueueSize)
 	}
+	if cfg.AuditRotateMaxMB != 9 || cfg.AuditRotateMaxBackups != 4 {
+		t.Fatalf("unexpected audit rotate overrides: mb=%d backups=%d", cfg.AuditRotateMaxMB, cfg.AuditRotateMaxBackups)
+	}
 	if cfg.ReadHeaderTimeout != 7*time.Second || cfg.ReadTimeout != 17*time.Second || cfg.WriteTimeout != 27*time.Second || cfg.IdleTimeout != 37*time.Second {
 		t.Fatalf("unexpected timeout overrides: %+v", cfg)
+	}
+}
+
+func TestLoadRejectsInvalidLogLevel(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "bad-log.yaml")
+	if err := os.WriteFile(configPath, []byte("bearer_token: t\nlog_level: verbose\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err == nil {
+		t.Fatal("expected invalid log level to fail")
 	}
 }
 
