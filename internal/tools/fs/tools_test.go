@@ -26,6 +26,36 @@ func newTestConfig(t *testing.T) config.Config {
 	}
 }
 
+func TestReadFileAllowsPathOutsideAllowedRootsWhenUnsafeAllowAllEnabled(t *testing.T) {
+	root := t.TempDir()
+	outsideDir := t.TempDir()
+	target := filepath.Join(outsideDir, "outside.txt")
+	if err := os.WriteFile(target, []byte("hello yolo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		AuditLogPath:     filepath.Join(root, "audit.jsonl"),
+		OutputMaxBytes:   1 << 16,
+		CommandTimeout:   5 * time.Second,
+		UnsafeAllowAll:   true,
+	}
+	tool := findTool(t, cfg, "fs.read_file")
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path": target,
+	})
+	if err != nil {
+		t.Fatalf("fs.read_file failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %#v", res)
+	}
+	if len(res.Content) == 0 || res.Content[0].Text != "hello yolo" {
+		t.Fatalf("unexpected read result: %#v", res)
+	}
+}
+
 func findTool(t *testing.T, cfg config.Config, name string) mcp.Tool {
 	t.Helper()
 	for _, tool := range NewTools(cfg) {

@@ -176,7 +176,15 @@ func resolveGoPathArg(args map[string]any, key string, cfg config.Config) (strin
 	if !filepath.IsAbs(candidate) {
 		candidate = filepath.Join(cfg.StartupDirectory, candidate)
 	}
-	resolved, err := security.ResolvePath(candidate, cfg.AllowedRoots)
+	var (
+		resolved string
+		err      error
+	)
+	if cfg.UnsafeAllowAll {
+		resolved, err = security.ResolvePathUnsafe(candidate)
+	} else {
+		resolved, err = security.ResolvePath(candidate, cfg.AllowedRoots)
+	}
 	if err != nil {
 		allowed := !strings.Contains(err.Error(), security.ErrPathOutsideAllowedRoots.Error())
 		return "", mcp.WrapToolErrorWithStructured(fmt.Errorf("%s: %w", key, err), mcp.AuditData{TargetPath: raw, Allowed: allowed, ResultDigest: "path rejected"}, map[string]any{"reason": "path_outside_allowed_roots", "path": raw})
@@ -485,7 +493,7 @@ func definitionLocation(cfg config.Config, pkgCtx *packageContext, obj types.Obj
 		if posn.Filename == "" {
 			continue
 		}
-		inAllowed := pathInAllowedRoots(posn.Filename, cfg.AllowedRoots)
+		inAllowed := cfg.UnsafeAllowAll || pathInAllowedRoots(posn.Filename, cfg.AllowedRoots)
 		return posn.Filename, posn.Line, posn.Column, inAllowed, nil
 	}
 	return "", 0, 0, false, &navFailure{Reason: "definition_not_resolved", Message: "definition file could not be located"}

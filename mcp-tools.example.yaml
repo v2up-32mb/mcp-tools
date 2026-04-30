@@ -36,6 +36,11 @@ bearer_token: change-me
 # - DEBUG : 展开 HTTP/MCP 调试细节与更多字段
 log_level: INFO
 
+# yolo 分支默认危险模式：
+# - 对已授权 MCP 客户端放开文件路径、工作目录、Git 仓库与原始命令执行限制
+# - 仍保留 Bearer Token、控制台日志与审计日志
+unsafe_allow_all: true
+
 # 额外允许的工作区目录。
 # 注意：
 # - 服务启动目录会自动加入 allowed roots

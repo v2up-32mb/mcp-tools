@@ -505,7 +505,15 @@ func (s *Server) readResource(uri string) (map[string]any, error) {
 		return nil, fmt.Errorf("unsupported resource uri %q", uri)
 	}
 	path := strings.TrimPrefix(uri, "file://")
-	resolved, err := security.ResolvePath(path, s.cfg.AllowedRoots)
+	var (
+		resolved string
+		err      error
+	)
+	if s.cfg.UnsafeAllowAll {
+		resolved, err = security.ResolvePathUnsafe(path)
+	} else {
+		resolved, err = security.ResolvePath(path, s.cfg.AllowedRoots)
+	}
 	if err != nil {
 		if filepath.Clean(path) == filepath.Clean(s.cfg.AuditLogPath) {
 			resolved = filepath.Clean(path)
@@ -707,7 +715,15 @@ func (s *Server) completeGoTestTarget(workdir string, prefix string) []string {
 	for _, root := range s.cfg.AllowedRoots {
 		base := root
 		if strings.TrimSpace(workdir) != "" && workdir != "." {
-			candidate, err := security.ResolvePath(workdir, s.cfg.AllowedRoots)
+			var (
+				candidate string
+				err       error
+			)
+			if s.cfg.UnsafeAllowAll {
+				candidate, err = security.ResolvePathUnsafe(workdir)
+			} else {
+				candidate, err = security.ResolvePath(workdir, s.cfg.AllowedRoots)
+			}
 			if err == nil {
 				base = candidate
 			}
@@ -1000,15 +1016,15 @@ func (s *Server) maybeNotifyResourceUpdated(toolName string, args map[string]any
 	switch toolName {
 	case "fs.write_file", "fs.replace_text", "fs.apply_unified_diff", "fs.edit_lines", "fs.make_dir", "fs.delete_path":
 		if path, _ := args["path"].(string); strings.TrimSpace(path) != "" {
-			if resolved, err := security.ResolvePath(resolveAgainstStartup(path, s.cfg.StartupDirectory), s.cfg.AllowedRoots); err == nil {
-				uris = append(uris, resourceUpdateTargets(resolved, s.cfg.AllowedRoots)...)
+			if resolved, err := s.resolvePathForResource(resolveAgainstStartup(path, s.cfg.StartupDirectory)); err == nil {
+				uris = append(uris, resourceUpdateTargets(resolved, s.cfg.AllowedRoots, s.cfg.UnsafeAllowAll)...)
 			}
 		}
 	case "fs.move_path":
 		for _, key := range []string{"src", "dst"} {
 			if path, _ := args[key].(string); strings.TrimSpace(path) != "" {
-				if resolved, err := security.ResolvePath(resolveAgainstStartup(path, s.cfg.StartupDirectory), s.cfg.AllowedRoots); err == nil {
-					uris = append(uris, resourceUpdateTargets(resolved, s.cfg.AllowedRoots)...)
+				if resolved, err := s.resolvePathForResource(resolveAgainstStartup(path, s.cfg.StartupDirectory)); err == nil {
+					uris = append(uris, resourceUpdateTargets(resolved, s.cfg.AllowedRoots, s.cfg.UnsafeAllowAll)...)
 				}
 			}
 		}
@@ -1035,6 +1051,7 @@ func (s *Server) stateSnapshot() map[string]any {
 		"config": map[string]any{
 			"listen_addr":              s.cfg.ListenAddr,
 			"log_level":                s.cfg.LogLevel,
+			"unsafe_allow_all":         s.cfg.UnsafeAllowAll,
 			"allowed_roots":            s.cfg.AllowedRoots,
 			"allowed_origins":          s.cfg.AllowedOrigins,
 			"audit_log_path":           s.cfg.AuditLogPath,
@@ -1136,8 +1153,29 @@ func cloneStrings(values []string) []string {
 	return out
 }
 
-func resourceUpdateTargets(resolved string, allowedRoots []string) []string {
+func resourceUpdateTargets(resolved string, allowedRoots []string, unsafeAllowAll bool) []string {
 	targets := []string{"file://" + resolved}
+	if unsafeAllowAll {
+		current := filepath.Dir(resolved)
+		for {
+			if current == resolved {
+				current = filepath.Dir(current)
+			}
+			if current == "." || current == string(filepath.Separator) {
+				if current == string(filepath.Separator) {
+					targets = append(targets, "file://"+current)
+				}
+				break
+			}
+			targets = append(targets, "file://"+current)
+			next := filepath.Dir(current)
+			if next == current {
+				break
+			}
+			current = next
+		}
+		return dedupeLocalStrings(targets)
+	}
 	for _, root := range allowedRoots {
 		canonicalRoot, err := security.ResolvePath(root, allowedRoots)
 		if err != nil {
@@ -1167,6 +1205,13 @@ func resourceUpdateTargets(resolved string, allowedRoots []string) []string {
 		}
 	}
 	return targets
+}
+
+func (s *Server) resolvePathForResource(path string) (string, error) {
+	if s.cfg.UnsafeAllowAll {
+		return security.ResolvePathUnsafe(path)
+	}
+	return security.ResolvePath(path, s.cfg.AllowedRoots)
 }
 
 func authorizeRequest(r *http.Request, token string) error {

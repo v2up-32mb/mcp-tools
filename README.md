@@ -1,6 +1,19 @@
 # mcp-tools
 
-一个基于 Go 1.20 的单体 MCP HTTP 服务，提供受限的文件系统、Git、Go 导航与 Go 工具链执行能力，供远程 AI 代理通过 MCP 调用本地工具。
+一个基于 Go 1.20 的单体 MCP HTTP 服务，提供文件系统、Git、Go 导航与命令执行能力，供远程 AI 代理通过 MCP 调用本地工具。
+
+当前 `yolo` 分支默认开启：
+
+```yaml
+unsafe_allow_all: true
+```
+
+也就是：
+
+- 保留 Bearer Token
+- 保留控制台日志
+- 保留 JSONL 审计日志
+- 但对**已授权 MCP 客户端**放开文件路径、工作目录、Git 仓库与原始命令执行限制
 
 补充维护文档：
 
@@ -168,6 +181,29 @@ log_level: INFO
 不会打印完整 Bearer Token。
 `INFO/WARN` 默认不带 `request_id` / `session_id`；`ERROR/DEBUG` 才会带追踪字段。
 
+#### `unsafe_allow_all`
+
+当前 `yolo` 分支默认：
+
+```yaml
+unsafe_allow_all: true
+```
+
+语义：
+
+- `true`
+  - 允许 `fs.*` 访问 `allowed_roots` 外路径
+  - 允许 `exec.run` 用 `command + args + env` 执行原始命令
+  - 允许 `git.*` / `go.*` 脱离 `allowed_roots` 约束
+- `false`
+  - 退回主线分支那套白名单/允许目录约束
+
+这不会关闭：
+
+- Bearer Token 鉴权
+- 控制台日志
+- 审计日志
+
 #### `allowed_roots`
 
 额外允许访问的目录白名单。
@@ -243,6 +279,7 @@ allowed_origins:
 - `bearer_token`
 - `allowed_roots`
 - `log_level`
+- `unsafe_allow_all`
 - `allowed_origins`
 - `audit_log_path`
 - `audit_rotate_max_mb`
@@ -327,6 +364,7 @@ go run ./cmd/mcp-tools
 - `MCP_CONFIG_FILE`：显式指定 YAML 配置文件路径；若未设置则会尝试默认 home 配置文件
 - `MCP_BEARER_TOKEN`：Bearer Token；若 YAML 未配置则必填
 - `MCP_LOG_LEVEL`：控制台日志级别，支持 `INFO/WARN/ERROR/DEBUG`
+- `MCP_UNSAFE_ALLOW_ALL`：是否开启满权限模式，支持 `true/false`，当前 `yolo` 分支默认 `true`
 - `MCP_LISTEN_ADDR`：默认 `0.0.0.0:8080`
 - `MCP_ALLOWED_ROOTS`：逗号分隔的额外允许目录
 - `MCP_ALLOWED_ORIGINS`：逗号分隔的允许浏览器来源

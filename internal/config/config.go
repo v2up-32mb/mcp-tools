@@ -36,6 +36,7 @@ type Config struct {
 	ListenAddr            string
 	BearerToken           string
 	LogLevel              string
+	UnsafeAllowAll        bool
 	AllowedRoots          []string
 	AllowedOrigins        []string
 	AuditLogPath          string
@@ -88,6 +89,7 @@ type fileConfig struct {
 	ListenAddr            string         `yaml:"listen_addr"`
 	BearerToken           string         `yaml:"bearer_token"`
 	LogLevel              string         `yaml:"log_level"`
+	UnsafeAllowAll        *bool          `yaml:"unsafe_allow_all"`
 	AllowedRoots          []string       `yaml:"allowed_roots"`
 	AllowedOrigins        []string       `yaml:"allowed_origins"`
 	AuditLogPath          string         `yaml:"audit_log_path"`
@@ -193,6 +195,7 @@ func defaultConfig(cwd string) Config {
 	return Config{
 		ListenAddr:            "0.0.0.0:8080",
 		LogLevel:              "INFO",
+		UnsafeAllowAll:        true,
 		AllowedRoots:          defaultAllowedRoots(cwd),
 		AuditLogPath:          defaultAuditLogPath(cwd),
 		AuditRotateMaxMB:      10,
@@ -234,6 +237,9 @@ func applyYAMLFile(cfg *Config, path string) error {
 	}
 	if strings.TrimSpace(fc.LogLevel) != "" {
 		cfg.LogLevel = normalizeLogLevel(fc.LogLevel)
+	}
+	if fc.UnsafeAllowAll != nil {
+		cfg.UnsafeAllowAll = *fc.UnsafeAllowAll
 	}
 	if len(fc.AllowedRoots) > 0 {
 		roots, err := resolvePathList(fc.AllowedRoots, baseDir)
@@ -322,6 +328,13 @@ func applyEnv(cfg *Config, cwd string) error {
 	}
 	if value := os.Getenv("MCP_LOG_LEVEL"); value != "" {
 		cfg.LogLevel = normalizeLogLevel(value)
+	}
+	if value := os.Getenv("MCP_UNSAFE_ALLOW_ALL"); value != "" {
+		parsed, err := parseBool(value, "MCP_UNSAFE_ALLOW_ALL")
+		if err != nil {
+			return err
+		}
+		cfg.UnsafeAllowAll = parsed
 	}
 	if value := os.Getenv("MCP_ALLOWED_ROOTS"); value != "" {
 		roots, err := resolvePathList(splitCSV(value), cwd)
@@ -863,6 +876,17 @@ func parseNonNegativeInt(raw, name string) (int, error) {
 		return 0, fmt.Errorf("invalid %s", name)
 	}
 	return value, nil
+}
+
+func parseBool(raw, name string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid %s", name)
+	}
 }
 
 func normalizeLogLevel(value string) string {

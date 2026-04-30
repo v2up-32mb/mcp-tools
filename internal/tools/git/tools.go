@@ -160,7 +160,13 @@ func resolveRepo(ctx context.Context, cfg config.Config, args map[string]any) (s
 	if !filepath.IsAbs(candidate) {
 		candidate = filepath.Join(cfg.StartupDirectory, candidate)
 	}
-	workdir, err := security.RequireAllowedWorkdir(candidate, cfg.AllowedRoots)
+	var workdir string
+	var err error
+	if cfg.UnsafeAllowAll {
+		workdir, err = security.RequireExistingWorkdir(candidate)
+	} else {
+		workdir, err = security.RequireAllowedWorkdir(candidate, cfg.AllowedRoots)
+	}
 	if err != nil {
 		allowed := !errors.Is(err, security.ErrPathOutsideAllowedRoots)
 		return "", mcp.WrapToolError(fmt.Errorf("repo_path: %w", err), mcp.AuditData{TargetPath: raw, Allowed: allowed, ResultDigest: "repo rejected"})
@@ -174,7 +180,11 @@ func resolveRepo(ctx context.Context, cfg config.Config, args map[string]any) (s
 		return "", mcp.WrapToolError(fmt.Errorf("repo_path is not a git repository"), mcp.AuditData{Workdir: workdir, Allowed: true, Stderr: truncate(string(output), cfg.OutputMaxBytes), ResultDigest: "repo discovery failed"})
 	}
 	repoRoot := strings.TrimSpace(string(output))
-	repoRoot, err = security.RequireAllowedWorkdir(repoRoot, cfg.AllowedRoots)
+	if cfg.UnsafeAllowAll {
+		repoRoot, err = security.RequireExistingWorkdir(repoRoot)
+	} else {
+		repoRoot, err = security.RequireAllowedWorkdir(repoRoot, cfg.AllowedRoots)
+	}
 	if err != nil {
 		allowed := !errors.Is(err, security.ErrPathOutsideAllowedRoots)
 		return "", mcp.WrapToolError(fmt.Errorf("repo root outside allowed roots"), mcp.AuditData{TargetPath: repoRoot, Allowed: allowed, ResultDigest: "repo rejected"})

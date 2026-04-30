@@ -23,6 +23,17 @@
 3. 所有路径/仓库/workdir 都必须落在允许目录内
 4. 工具错误统一包装成 MCP tool error，而不是任意 panic / 原始错误泄露
 
+当前 `yolo` 分支新增：
+
+- `unsafe_allow_all`
+
+当该配置为 `true` 时：
+
+- `fs.*` 路径解析不再要求落在 `allowed_roots`
+- `git.*` 的 `repo_path` / repo root 不再要求落在 `allowed_roots`
+- `go.*` 的目标文件不再要求落在 `allowed_roots`
+- `exec.run` 允许原始命令模式
+
 ---
 
 ## 2. 共有安全机制
@@ -34,6 +45,14 @@
 - 文件系统目标路径必须在 `AllowedRoots` 内
 - 相对路径默认相对于 `StartupDirectory`
 - 解析流程会做规范化和白名单判断
+
+例外：
+
+- 当 `unsafe_allow_all=true` 时，上述 allowed-roots 限制对工具调用层失效
+- 此时仍会做：
+  - 路径规范化
+  - 绝对路径化
+  - 目录存在性检查（对 workdir/repo）
 
 ### 2.2 审计
 
@@ -133,6 +152,31 @@
 - `ERROR/DEBUG` 才输出追踪字段
 - 工具调用只输出白名单参数摘要
 - 大字段只输出摘要，不打印完整 `content` / `new_text` / `diff`
+
+### 2.5 yolo 分支危险模式
+
+`unsafe_allow_all=true` 时的行为模型：
+
+1. `fs.*`
+   - `resolvePathArg` 走 `security.ResolvePathUnsafe`
+2. `exec.run`
+   - 除 preset 模式外，额外接受原始：
+     - `command`
+     - `args`
+     - `env`
+     - `workdir`
+3. `git.*`
+   - `resolveRepo` 不再调用 allowed-roots workdir 校验
+4. `go.*`
+   - Go 文件路径解析不再受 `allowed_roots` 限制
+5. HTTP 资源读取/资源更新
+   - `resources/read` 与资源更新目标解析同样按 unsafe 模式放开
+
+这不会关闭：
+
+- Bearer Token
+- 控制台日志
+- 审计日志
 
 ---
 

@@ -101,6 +101,7 @@ func printConfigSummary(cfg config.Config) error {
 	summary := map[string]any{
 		"listen_addr":              cfg.ListenAddr,
 		"log_level":                cfg.LogLevel,
+		"unsafe_allow_all":         cfg.UnsafeAllowAll,
 		"allowed_roots":            cfg.AllowedRoots,
 		"allowed_origins":          cfg.AllowedOrigins,
 		"audit_log_path":           cfg.AuditLogPath,

@@ -32,6 +32,10 @@ func ResolvePath(path string, allowedRoots []string) (string, error) {
 	return "", ErrPathOutsideAllowedRoots
 }
 
+func ResolvePathUnsafe(path string) (string, error) {
+	return canonicalizePathAllowMissing(path)
+}
+
 func canonicalizePathAllowMissing(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -42,6 +46,21 @@ func canonicalizePathAllowMissing(path string) (string, error) {
 
 func RequireAllowedWorkdir(path string, allowedRoots []string) (string, error) {
 	resolved, err := ResolvePath(path, allowedRoots)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("workdir must be directory")
+	}
+	return resolved, nil
+}
+
+func RequireExistingWorkdir(path string) (string, error) {
+	resolved, err := ResolvePathUnsafe(path)
 	if err != nil {
 		return "", err
 	}

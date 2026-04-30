@@ -311,6 +311,7 @@ func summarizeToolFields(name string, args map[string]any) []applog.Field {
 		fields = appendPathsCountField(fields, args, "paths")
 	case name == "exec.run":
 		fields = appendStringField(fields, args, "preset", "preset")
+		fields = appendStringField(fields, args, "command", "command")
 		fields = appendPathLikeField(fields, args, "workdir", "workdir")
 		fields = appendArgsCountField(fields, args, "args")
 	case name == "exec.run_template":

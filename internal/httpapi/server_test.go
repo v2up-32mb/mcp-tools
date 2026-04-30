@@ -683,6 +683,46 @@ func TestResourcesReadFileAfterInitialize(t *testing.T) {
 	}
 }
 
+func TestResourcesReadOutsideAllowedRootsWhenUnsafeAllowAllEnabled(t *testing.T) {
+	handler, _, _ := newTestServerWithConfig(t, func(cfg *config.Config) {
+		cfg.UnsafeAllowAll = true
+	})
+	sessionID := initializeSession(t, handler)
+	outsideDir := t.TempDir()
+	target := filepath.Join(outsideDir, "outside.txt")
+	if err := os.WriteFile(target, []byte("outside resource\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      91,
+		"method":  "resources/read",
+		"params": map[string]any{
+			"uri": "file://" + target,
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	result := decoded["result"].(map[string]any)
+	contents := result["contents"].([]any)
+	item := contents[0].(map[string]any)
+	if item["text"] != "outside resource\n" {
+		t.Fatalf("unexpected resource file contents: %#v", item)
+	}
+}
+
 func TestResourcesReadDirectoryMetadataAfterInitialize(t *testing.T) {
 	handler, dir, _ := newTestServer(t)
 	sessionID := initializeSession(t, handler)

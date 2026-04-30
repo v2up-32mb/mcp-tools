@@ -11,7 +11,18 @@
 
 ## 1. 服务定位
 
-这是一个基于 Go 1.20 的单体 MCP 服务，主要面向“远程 AI 代理安全操作本地工作区”的场景。
+这是一个基于 Go 1.20 的单体 MCP 服务，主要面向“远程 AI 代理操作本地工作区”的场景。
+
+当前 `yolo` 分支默认开启：
+
+- `unsafe_allow_all = true`
+
+也就是：
+
+- 保留 Bearer Token
+- 保留控制台日志
+- 保留 JSONL 审计日志
+- 但对**已授权客户端**放开文件路径、工作目录、Git 仓库与原始命令执行边界
 
 当前能力边界：
 
@@ -225,7 +236,13 @@ data: {jsonrpc response or notification}
 - `make_build`
 - `go_clean_testcache`
 
-这不是 shell。客户端不能发送任意命令字符串。
+主线分支里，这不是 shell。客户端不能发送任意命令字符串。
+
+但在当前 `yolo` 分支里，若：
+
+- `unsafe_allow_all=true`
+
+则 `exec.run` 允许直接执行原始命令。
 
 ---
 
@@ -233,7 +250,7 @@ data: {jsonrpc response or notification}
 
 ### 6.1 目录范围
 
-所有文件、git、exec 行为都必须落在：
+主线分支中，所有文件、git、exec 行为都必须落在：
 
 - 服务启动目录
 - 配置中的 `allowed_roots`
@@ -244,6 +261,12 @@ data: {jsonrpc response or notification}
 - 绝对路径化
 - 允许根目录校验
 - 仓库/工作目录白名单校验
+
+但在当前 `yolo` 分支里，若：
+
+- `unsafe_allow_all = true`
+
+则上述目录边界会对已授权 MCP 客户端放开。
 
 ### 6.2 鉴权
 
@@ -444,10 +467,16 @@ data: {jsonrpc response or notification}
 - `git.add` / `git.restore` / `git.diff` 的 `paths` 必须是 repo-relative
 - `git.pull` 固定为 `--ff-only`
 
+在当前 `yolo` 分支里，若：
+
+- `unsafe_allow_all=true`
+
+则 `repo_path` / repo root 不再要求落在 `allowed_roots` 内。
+
 ## 7.5 `exec.run` 使用约定
 
-- 不是 shell，只能运行预定义 preset
-- `workdir` 必填，且必须落在 `allowed_roots` 内
+- 默认仍支持预定义 preset
+- `workdir` 必填
 - `go_test` / `go_generate` / `go_build` / `go_vet` 没有显式 target 时会自动补 `./...`
 - `go_mod_download` 会直接在 `workdir` 里执行 `go mod download`
 - `go_mod_tidy` 会直接在 `workdir` 里执行 `go mod tidy`
@@ -462,6 +491,27 @@ data: {jsonrpc response or notification}
 - `timeout_override_sec` 只能缩短默认超时
 - `-vettool` 不支持
 - `-o=...` / `-coverprofile=...` 这类 inline 路径值也会再次校验，不能写到 workdir 外
+
+### 7.5.1 `exec.run` 原始命令模式（仅 yolo 分支）
+
+当：
+
+- `unsafe_allow_all=true`
+
+时，`exec.run` 允许直接传：
+
+- `command`
+- `args`
+- `env`
+- `workdir`
+
+也就是客户端可以直接执行任意本地命令。  
+这条模式仍然保留：
+
+- 控制台日志
+- 工具调用审计
+- stdout / stderr 摘要
+- `env_keys` 审计摘要
 
 ---
 

@@ -197,6 +197,19 @@ func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsUnsafeAllowAllOnYoloBranch(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("MCP_BEARER_TOKEN", "env-token")
+
+	cfg, err := LoadWithOptions(LoadOptions{WorkDir: root})
+	if err != nil {
+		t.Fatalf("LoadWithOptions error: %v", err)
+	}
+	if !cfg.UnsafeAllowAll {
+		t.Fatalf("expected UnsafeAllowAll to default true on yolo branch, got %#v", cfg)
+	}
+}
+
 func TestLoadUsesDefaultHomeConfigPathWhenPresent(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()

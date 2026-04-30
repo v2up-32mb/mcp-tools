@@ -9,6 +9,12 @@
 ## [1.0.0] - 2026-04-30
 
 ### Added
+- `yolo` 分支默认开启 `unsafe_allow_all=true`，为已授权 MCP 客户端放开文件路径、工作目录、Git 仓库与原始命令执行限制，同时保留控制台日志与 JSONL 审计日志。
+- `exec.run` 在 `unsafe_allow_all=true` 时新增原始命令模式，支持：
+  - `command`
+  - `args`
+  - `env`
+  - `workdir`
 - 新增统一控制台应用日志：
   - `DEBUG`
   - `INFO`
@@ -31,6 +37,7 @@
 - 所有 Go preset 现在会把 `GOCACHE` / `GOMODCACHE` / `GOTMPDIR` 固定到 `~/.mcp-tools/cache` 下，降低依赖下载和构建缓存对外部目录的污染。
 
 ### Fixed
+- `fs.*` / `git.*` / `go.*` / `resources/read` / 资源更新链路在 `unsafe_allow_all=true` 时会一致按危险模式放开，不再出现“有些工具 yolo、有些还偷偷卡 allowed_roots”的半放行状态。
 - 移除独立 `debug_http_log` 开关，统一改由 `log_level=DEBUG` 控制脱敏 HTTP/MCP 调试日志。
 - 恢复项目 Go 基线到 `go 1.20`，并将 `golang.org/x/tools` / `golang.org/x/mod` / `golang.org/x/sync` 依赖链回退到与 Windows 7 目标场景一致的兼容版本。
 - 调整 `GET /mcp` 的 stale-session 处理：服务重启后若客户端仍带旧 `Mcp-Session-Id` 开 stream，服务端现在按“未初始化 session”返回重连提示，避免首个重连动作直接落成 `invalid or expired session`。

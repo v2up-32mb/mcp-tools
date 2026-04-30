@@ -377,7 +377,15 @@ func resolvePathArg(args map[string]any, key string, cfg config.Config) (string,
 	if !filepath.IsAbs(candidate) {
 		candidate = filepath.Join(cfg.StartupDirectory, candidate)
 	}
-	resolved, err := security.ResolvePath(candidate, cfg.AllowedRoots)
+	var (
+		resolved string
+		err      error
+	)
+	if cfg.UnsafeAllowAll {
+		resolved, err = security.ResolvePathUnsafe(candidate)
+	} else {
+		resolved, err = security.ResolvePath(candidate, cfg.AllowedRoots)
+	}
 	if err != nil {
 		allowed := !errors.Is(err, security.ErrPathOutsideAllowedRoots)
 		return "", mcp.WrapToolError(fmt.Errorf("%s: %w", key, err), mcp.AuditData{TargetPath: raw, Allowed: allowed, ResultDigest: "path rejected"})

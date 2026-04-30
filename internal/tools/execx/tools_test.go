@@ -167,3 +167,40 @@ func TestValidateArgsRejectsPositionalArgsForGoModTidy(t *testing.T) {
 		t.Fatal("expected positional args to be rejected for go_mod_tidy")
 	}
 }
+
+func TestExecRunAllowsRawCommandOutsideAllowedRootsWhenUnsafeAllowAllEnabled(t *testing.T) {
+	allowedRoot := t.TempDir()
+	workdir := t.TempDir()
+	cfg := config.Config{
+		AllowedRoots:     []string{allowedRoot},
+		StartupDirectory: allowedRoot,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		UnsafeAllowAll:   true,
+	}
+	tool := findTool(t, cfg, "exec.run")
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"command": "sh",
+		"args":    []any{"-c", "printf %s \"$MCP_YOLO_TEST\""},
+		"env": map[string]any{
+			"MCP_YOLO_TEST": "raw-ok",
+		},
+		"workdir": workdir,
+	})
+	if err != nil {
+		t.Fatalf("exec.run raw command failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %#v", res)
+	}
+	if text := strings.TrimSpace(res.Content[0].Text); text != "raw-ok" {
+		t.Fatalf("unexpected stdout: %q", text)
+	}
+	if res.StructuredContent["mode"] != "raw" {
+		t.Fatalf("expected raw mode in structured content, got %#v", res.StructuredContent)
+	}
+	envKeys, ok := res.StructuredContent["env_keys"].([]string)
+	if !ok || len(envKeys) != 1 || envKeys[0] != "MCP_YOLO_TEST" {
+		t.Fatalf("unexpected env_keys: %#v", res.StructuredContent)
+	}
+}

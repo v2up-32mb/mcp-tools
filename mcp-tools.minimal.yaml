@@ -18,6 +18,9 @@ bearer_token: change-me
 # 调试 HTTP/MCP 细节时可临时改成 DEBUG。
 log_level: INFO
 
+# yolo 分支默认危险模式。
+unsafe_allow_all: true
+
 # 额外允许目录。
 # 服务启动目录和 ~/.mcp-tools 会自动加入白名单。
 allowed_roots:
