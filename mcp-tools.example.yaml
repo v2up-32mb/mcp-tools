@@ -14,6 +14,9 @@
 # 配置优先级：
 #   defaults < 默认 home 配置文件 < YAML < environment variables
 #
+# YAML 必须是单文档配置；空文件/仅注释文件允许存在并表示“不做 YAML 覆盖”。
+# 未知字段、字段拼写错误或额外文档会在启动或 -validate-config 时失败。
+#
 # 最常用、最需要先理解的只有 3 个：
 #   1. bearer_token
 #   2. listen_addr
@@ -46,6 +49,7 @@ unsafe_allow_all: true
 # - 服务启动目录会自动加入 allowed roots
 # - ~/.mcp-tools 也会自动加入 allowed roots
 # - 这里配置的是“额外白名单目录”
+# - 列表项不能为空；空字符串会按配置错误拒绝
 allowed_roots:
   - ./workspace
 

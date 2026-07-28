@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -126,6 +127,277 @@ func TestLoadRelativeConfigPathAgainstWorkDir(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsUnknownYAMLFields(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "unknown.yaml")
+	content := `bearer_token: t
+unsafe_allow_alll: false
+exec:
+  presets:
+    go_test:
+      timeout_secs: 5
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err == nil {
+		t.Fatal("expected unknown YAML fields to fail")
+	}
+}
+
+func TestLoadRejectsMultipleYAMLDocuments(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "multiple-docs.yaml")
+	content := `bearer_token: t
+---
+unsafe_allow_all: false
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err == nil {
+		t.Fatal("expected multiple YAML documents to fail")
+	}
+}
+
+func TestLoadAcceptsEmptyYAMLFile(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "empty.yaml")
+	if err := os.WriteFile(configPath, []byte("# intentionally empty; use env/defaults\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MCP_BEARER_TOKEN", "from-env")
+
+	cfg, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err != nil {
+		t.Fatalf("LoadWithOptions error: %v", err)
+	}
+	if cfg.BearerToken != "from-env" {
+		t.Fatalf("expected env token, got %q", cfg.BearerToken)
+	}
+}
+
+func TestLoadRejectsExplicitNullYAMLFile(t *testing.T) {
+	for name, content := range map[string]string{
+		"null":  "null\n",
+		"tilde": "~\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			configPath := filepath.Join(root, "null.yaml")
+			if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("MCP_BEARER_TOKEN", "from-env")
+
+			_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+			if err == nil {
+				t.Fatal("expected explicit null YAML document to fail")
+			}
+		})
+	}
+}
+
+func TestLoadRejectsExplicitNullYAMLField(t *testing.T) {
+	for name, content := range map[string]string{
+		"top_level":   "bearer_token: t\nunsafe_allow_all: null\n",
+		"nested":      "bearer_token: t\nexec:\n  presets:\n    go_test:\n      command: null\n",
+		"list_item":   "bearer_token: t\nallowed_roots:\n  - null\n",
+		"empty_field": "bearer_token: t\nunsafe_allow_all:\n",
+		"empty_list":  "bearer_token: t\nallowed_roots:\n  -\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			configPath := filepath.Join(root, "null-field.yaml")
+			if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+			if err == nil {
+				t.Fatal("expected explicit null YAML field to fail")
+			}
+			if !strings.Contains(err.Error(), "null") {
+				t.Fatalf("expected null context in error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsEmptyAllowedRootEntry(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "bad-root.yaml")
+	content := "bearer_token: t\nallowed_roots: [\"\"]\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err == nil {
+		t.Fatal("expected empty allowed_roots entry to fail")
+	}
+}
+
+func TestLoadRejectsEmptyEnvAllowedRootEntry(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("MCP_BEARER_TOKEN", "env-token")
+	t.Setenv("MCP_ALLOWED_ROOTS", filepath.Join(root, "extra")+",")
+
+	_, err := LoadWithOptions(LoadOptions{WorkDir: root})
+	if err == nil {
+		t.Fatal("expected empty MCP_ALLOWED_ROOTS entry to fail")
+	}
+	if !strings.Contains(err.Error(), "MCP_ALLOWED_ROOTS") {
+		t.Fatalf("expected MCP_ALLOWED_ROOTS context, got %v", err)
+	}
+}
+
+func TestLoadRejectsEmptyAllowedOriginEntry(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "bad-origin.yaml")
+	content := "bearer_token: t\nallowed_origins: [\"https://ui.example\", \"\"]\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err == nil {
+		t.Fatal("expected empty allowed_origins entry to fail")
+	}
+	if !strings.Contains(err.Error(), "allowed_origins") {
+		t.Fatalf("expected allowed_origins context, got %v", err)
+	}
+}
+
+func TestLoadRejectsEmptyEnvAllowedOriginEntry(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("MCP_BEARER_TOKEN", "env-token")
+	t.Setenv("MCP_ALLOWED_ORIGINS", "https://ui.example,")
+
+	_, err := LoadWithOptions(LoadOptions{WorkDir: root})
+	if err == nil {
+		t.Fatal("expected empty MCP_ALLOWED_ORIGINS entry to fail")
+	}
+	if !strings.Contains(err.Error(), "MCP_ALLOWED_ORIGINS") {
+		t.Fatalf("expected MCP_ALLOWED_ORIGINS context, got %v", err)
+	}
+}
+
+func TestLoadResolvesTemplateAllowedWorkdirsRelativeToConfigFile(t *testing.T) {
+	startup := t.TempDir()
+	configDir := t.TempDir()
+	workspace := filepath.Join(configDir, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "config.yaml")
+	content := `bearer_token: t
+allowed_roots:
+  - ./workspace
+exec:
+  command_templates:
+    local:
+      command: [pwd]
+      allowed_workdirs: ["./workspace"]
+      timeout_sec: 5
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: startup})
+	if err != nil {
+		t.Fatalf("LoadWithOptions error: %v", err)
+	}
+	got := cfg.CommandTemplates["local"].AllowedWorkdirs
+	if len(got) != 1 || got[0] != workspace {
+		t.Fatalf("expected allowed_workdirs to resolve against config dir, got %#v want %q", got, workspace)
+	}
+}
+
+func TestLoadRejectsEmptyTemplateAllowedWorkdir(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "bad-template-workdir.yaml")
+	content := "bearer_token: t\nexec:\n  command_templates:\n    bad:\n      command: [pwd]\n      allowed_workdirs: [\"\"]\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err == nil {
+		t.Fatal("expected empty command template allowed_workdirs entry to fail")
+	}
+}
+
+func TestLoadKeepsBareExecCommandsAsPathLookups(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "commands.yaml")
+	content := `bearer_token: t
+exec:
+  presets:
+    custom_go:
+      command: go
+      timeout_sec: 5
+  command_templates:
+    custom_make:
+      command: [make, test]
+      timeout_sec: 5
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err != nil {
+		t.Fatalf("LoadWithOptions error: %v", err)
+	}
+	if got := cfg.ExecPresets["custom_go"].Command; got != "go" {
+		t.Fatalf("expected bare preset command to stay PATH lookup, got %q", got)
+	}
+	if got := cfg.CommandTemplates["custom_make"].Command[0]; got != "make" {
+		t.Fatalf("expected bare template command to stay PATH lookup, got %q", got)
+	}
+}
+
+func TestLoadResolvesPathLikeExecCommandsRelativeToConfigFile(t *testing.T) {
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "commands.yaml")
+	content := `bearer_token: t
+exec:
+  presets:
+    custom_tool:
+      command: ./bin/tool
+      timeout_sec: 5
+  command_templates:
+    custom_template:
+      command: [./bin/template-tool, arg]
+      timeout_sec: 5
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err != nil {
+		t.Fatalf("LoadWithOptions error: %v", err)
+	}
+	wantPreset := filepath.Join(root, "bin", "tool")
+	if got := cfg.ExecPresets["custom_tool"].Command; got != wantPreset {
+		t.Fatalf("expected path-like preset command %q, got %q", wantPreset, got)
+	}
+	wantTemplate := filepath.Join(root, "bin", "template-tool")
+	if got := cfg.CommandTemplates["custom_template"].Command[0]; got != wantTemplate {
+		t.Fatalf("expected path-like template command %q, got %q", wantTemplate, got)
+	}
+}
+
 func TestLoadRejectsUnsupportedGitCommand(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "bad.yaml")
@@ -135,6 +407,33 @@ func TestLoadRejectsUnsupportedGitCommand(t *testing.T) {
 	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
 	if err == nil {
 		t.Fatal("expected unsupported git command to fail")
+	}
+}
+
+func TestLoadAllowsEmptyGitSubcommandWhitelist(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "no-git.yaml")
+	if err := os.WriteFile(configPath, []byte("bearer_token: t\ngit:\n  allowed_subcommands: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err != nil {
+		t.Fatalf("LoadWithOptions error: %v", err)
+	}
+	if len(cfg.GitAllowed) != 0 {
+		t.Fatalf("expected empty git whitelist, got %#v", cfg.GitAllowed)
+	}
+}
+
+func TestLoadRejectsEmptyGitSubcommandEntry(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "bad-git-empty.yaml")
+	if err := os.WriteFile(configPath, []byte("bearer_token: t\ngit:\n  allowed_subcommands: [status, \"\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err == nil {
+		t.Fatal("expected empty git subcommand entry to fail")
 	}
 }
 
@@ -151,12 +450,102 @@ func TestLoadRejectsBlockedExecArg(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsEmptyExecPresetArgEntries(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		wantErr string
+	}{
+		{
+			name:    "fixed_args",
+			content: "bearer_token: t\nexec:\n  presets:\n    go_test:\n      fixed_args: [\"test\", \"\"]\n",
+			wantErr: "fixed_args",
+		},
+		{
+			name:    "allowed_args",
+			content: "bearer_token: t\nexec:\n  presets:\n    go_test:\n      allowed_args: [\"-run\", \" \"]\n",
+			wantErr: "allowed_args",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			configPath := filepath.Join(root, "bad-exec-"+tt.name+".yaml")
+			if err := os.WriteFile(configPath, []byte(tt.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+			if err == nil {
+				t.Fatal("expected empty exec preset arg entry to fail")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error mentioning %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsEmptyExecPresetCommandOverride(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "bad-exec-command.yaml")
+	content := "bearer_token: t\nexec:\n  presets:\n    go_test:\n      command: \"\"\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err == nil {
+		t.Fatal("expected empty exec preset command override to fail")
+	}
+}
+
+func TestLoadRejectsInvalidExecEnvKey(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "bad-exec-env.yaml")
+	content := "bearer_token: t\nexec:\n  presets:\n    bad:\n      command: go\n      env:\n        BAD=KEY: value\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err == nil {
+		t.Fatal("expected invalid exec env key to fail")
+	}
+}
+
+func TestLoadRejectsInvalidTemplateEnvKey(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "bad-template-env.yaml")
+	content := "bearer_token: t\nexec:\n  command_templates:\n    bad:\n      command: [pwd]\n      env:\n        BAD=KEY: value\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err == nil {
+		t.Fatal("expected invalid command template env key to fail")
+	}
+}
+
+func TestLoadRejectsEmptyTemplateCommandFirstPart(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "bad-template-command.yaml")
+	content := "bearer_token: t\nexec:\n  command_templates:\n    bad:\n      command: [\"\"]\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err == nil {
+		t.Fatal("expected empty template command first part to fail")
+	}
+}
+
 func TestLoadEnvOverridesServerLimits(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("MCP_BEARER_TOKEN", "env-token")
 	t.Setenv("MCP_LOG_LEVEL", "debug")
 	t.Setenv("MCP_MAX_REQUEST_BYTES", "2048")
 	t.Setenv("MCP_STREAM_QUEUE_SIZE", "256")
+	t.Setenv("MCP_COMMAND_TIMEOUT_SEC", "19")
 	t.Setenv("MCP_READ_HEADER_TIMEOUT_SEC", "7")
 	t.Setenv("MCP_READ_TIMEOUT_SEC", "17")
 	t.Setenv("MCP_WRITE_TIMEOUT_SEC", "27")
@@ -177,6 +566,15 @@ func TestLoadEnvOverridesServerLimits(t *testing.T) {
 	if cfg.StreamQueueSize != 256 {
 		t.Fatalf("unexpected StreamQueueSize: %d", cfg.StreamQueueSize)
 	}
+	if cfg.CommandTimeout != 19*time.Second {
+		t.Fatalf("unexpected CommandTimeout: %s", cfg.CommandTimeout)
+	}
+	if got := cfg.ExecPresets["go_test"].Timeout; got != 19*time.Second {
+		t.Fatalf("expected env command timeout to update default exec preset timeout, got %s", got)
+	}
+	if got := cfg.CommandTemplates["make_build"].Timeout; got != 19*time.Second {
+		t.Fatalf("expected env command timeout to update default command template timeout, got %s", got)
+	}
 	if cfg.AuditRotateMaxMB != 9 || cfg.AuditRotateMaxBackups != 4 {
 		t.Fatalf("unexpected audit rotate overrides: mb=%d backups=%d", cfg.AuditRotateMaxMB, cfg.AuditRotateMaxBackups)
 	}
@@ -194,6 +592,103 @@ func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
 	if err == nil {
 		t.Fatal("expected invalid log level to fail")
+	}
+}
+
+func TestLoadYAMLCommandTimeoutUpdatesDefaultExecTimeouts(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "timeout.yaml")
+	content := "bearer_token: t\ncommand_timeout_sec: 7\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err != nil {
+		t.Fatalf("LoadWithOptions error: %v", err)
+	}
+	if cfg.CommandTimeout != 7*time.Second {
+		t.Fatalf("unexpected command timeout: %s", cfg.CommandTimeout)
+	}
+	if got := cfg.ExecPresets["go_build"].Timeout; got != 7*time.Second {
+		t.Fatalf("expected default exec preset timeout to inherit command_timeout_sec, got %s", got)
+	}
+	if got := cfg.CommandTemplates["make_test"].Timeout; got != 7*time.Second {
+		t.Fatalf("expected default command template timeout to inherit command_timeout_sec, got %s", got)
+	}
+}
+
+func TestLoadRejectsEmptySupportedProtocols(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "bad-protocols.yaml")
+	content := "bearer_token: t\nsupported_protocols: [\"\"]\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err == nil {
+		t.Fatal("expected empty supported_protocols to fail")
+	}
+}
+
+func TestLoadRejectsExplicitEmptySupportedProtocols(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "bad-empty-protocols.yaml")
+	content := "bearer_token: t\nsupported_protocols: []\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err == nil {
+		t.Fatal("expected explicit empty supported_protocols to fail")
+	}
+}
+
+func TestLoadRejectsMixedEmptySupportedProtocols(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "bad-mixed-protocols.yaml")
+	content := "bearer_token: t\nsupported_protocols: [\"2025-11-25\", \"\"]\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err == nil {
+		t.Fatal("expected mixed empty supported_protocols to fail")
+	}
+}
+
+func TestLoadRejectsOverflowingYAMLDuration(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "bad-timeout.yaml")
+	content := "bearer_token: t\ncommand_timeout_sec: 9223372037\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err == nil {
+		t.Fatal("expected overflowing command_timeout_sec to fail")
+	}
+}
+
+func TestLoadRejectsOverflowingEnvDuration(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("MCP_BEARER_TOKEN", "env-token")
+	t.Setenv("MCP_COMMAND_TIMEOUT_SEC", "9223372037")
+	_, err := LoadWithOptions(LoadOptions{WorkDir: root})
+	if err == nil {
+		t.Fatal("expected overflowing MCP_COMMAND_TIMEOUT_SEC to fail")
+	}
+}
+
+func TestLoadRejectsAuditRotateSizeOverflow(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "bad-audit-rotate.yaml")
+	content := "bearer_token: t\naudit_rotate_max_mb: 8796093022208\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err == nil {
+		t.Fatal("expected overflowing audit_rotate_max_mb to fail")
 	}
 }
 

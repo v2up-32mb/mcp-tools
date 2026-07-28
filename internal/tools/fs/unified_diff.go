@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/example/mcp-tools/internal/config"
 	"github.com/example/mcp-tools/internal/mcp"
+	"github.com/example/mcp-tools/internal/numconv"
 )
 
 type unifiedFilePatch struct {
@@ -53,15 +55,33 @@ func applyUnifiedDiff(cfg config.Config) func(context.Context, mcp.CallContext, 
 		if err != nil {
 			return mcp.Result{}, err
 		}
-		diffText, ok := args["diff"].(string)
-		if !ok || strings.TrimSpace(diffText) == "" {
+		diffText, err := requiredStringArg(args, "diff")
+		if err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		}
+		if strings.TrimSpace(diffText) == "" {
 			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("diff required"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
 		}
-		expectedOldText, _ := args["expected_old_text"].(string)
-		dryRun, _ := args["dry_run"].(bool)
+		expectedOldText, expectedOldTextSet, err := optionalStringArg(args, "expected_old_text")
+		if err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		}
+		dryRun, _, err := optionalBoolArg(args, "dry_run")
+		if err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		}
 		contextLines := 2
-		if v, ok := args["context_lines"].(float64); ok && v >= 0 && v <= 20 {
-			contextLines = int(v)
+		if v, ok, err := optionalIntArg(args, "context_lines"); err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		} else if ok {
+			switch {
+			case v < 0:
+				return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("context_lines must be >= 0"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+			case v > 20:
+				contextLines = 20
+			default:
+				contextLines = v
+			}
 		}
 
 		patch, failure := parseUnifiedDiff(diffText)
@@ -77,7 +97,7 @@ func applyUnifiedDiff(cfg config.Config) func(context.Context, mcp.CallContext, 
 			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "read failed"})
 		}
 		original := string(payload)
-		if expectedOldText != "" && expectedOldText != original {
+		if expectedOldTextSet && expectedOldText != original {
 			return mcp.Result{}, wrapPatchFailure(path, &patchFailure{
 				Reason:        "expected_old_text_mismatch",
 				ExpectedLines: splitForStructured(expectedOldText),
@@ -207,10 +227,25 @@ func parseHunk(lines []string, start int) (unifiedHunk, int, *patchFailure) {
 	if match == nil {
 		return unifiedHunk{}, 0, &patchFailure{Reason: "invalid_unified_diff", Message: "invalid hunk header"}
 	}
-	oldStart, _ := strconv.Atoi(match[1])
-	oldCount := parseDiffCount(match[2])
-	newStart, _ := strconv.Atoi(match[3])
-	newCount := parseDiffCount(match[4])
+	oldStart, err := parseDiffHeaderNumber(match[1])
+	if err != nil {
+		return unifiedHunk{}, 0, &patchFailure{Reason: "invalid_unified_diff", Message: "invalid hunk header number"}
+	}
+	oldCount, err := parseDiffCount(match[2])
+	if err != nil {
+		return unifiedHunk{}, 0, &patchFailure{Reason: "invalid_unified_diff", Message: "invalid hunk header number"}
+	}
+	newStart, err := parseDiffHeaderNumber(match[3])
+	if err != nil {
+		return unifiedHunk{}, 0, &patchFailure{Reason: "invalid_unified_diff", Message: "invalid hunk header number"}
+	}
+	newCount, err := parseDiffCount(match[4])
+	if err != nil {
+		return unifiedHunk{}, 0, &patchFailure{Reason: "invalid_unified_diff", Message: "invalid hunk header number"}
+	}
+	if (oldCount > 0 && oldStart == 0) || (newCount > 0 && newStart == 0) {
+		return unifiedHunk{}, 0, &patchFailure{Reason: "invalid_unified_diff", Message: "hunk header non-empty range start must be positive"}
+	}
 	hunk := unifiedHunk{OldStart: oldStart, OldCount: oldCount, NewStart: newStart, NewCount: newCount, Section: match[5]}
 
 	i := start + 1
@@ -258,12 +293,19 @@ validate:
 	return hunk, i, nil
 }
 
-func parseDiffCount(raw string) int {
-	if raw == "" {
-		return 1
+func parseDiffHeaderNumber(raw string) (int, error) {
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, err
 	}
-	v, _ := strconv.Atoi(raw)
-	return v
+	return v, nil
+}
+
+func parseDiffCount(raw string) (int, error) {
+	if raw == "" {
+		return 1, nil
+	}
+	return parseDiffHeaderNumber(raw)
 }
 
 func parseDiffHeaderPath(line string, prefix string) string {
@@ -286,7 +328,7 @@ func validatePatchPaths(patch unifiedFilePatch, resolvedPath string, rawPath any
 	if raw, ok := rawPath.(string); ok {
 		addCandidate(raw)
 	}
-	if rel, err := filepath.Rel(startupDir, resolvedPath); err == nil && !strings.HasPrefix(rel, "..") {
+	if rel, err := filepath.Rel(startupDir, resolvedPath); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		addCandidate(rel)
 	}
 
@@ -466,7 +508,17 @@ func intValue(v any) int {
 	case int:
 		return value
 	case float64:
-		return int(value)
+		parsed, ok := numconv.IntFromFloat64OK(value)
+		if !ok {
+			return 0
+		}
+		return parsed
+	case json.Number:
+		parsed, ok := numconv.IntFromJSONNumberOK(value)
+		if !ok {
+			return 0
+		}
+		return parsed
 	default:
 		return 0
 	}
@@ -484,11 +536,11 @@ func schemaApplyUnifiedDiff() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"path":              map[string]any{"type": "string"},
-			"diff":              map[string]any{"type": "string"},
+			"path":              nonEmptyStringSchema(),
+			"diff":              nonEmptyStringSchema(),
 			"expected_old_text": map[string]any{"type": "string"},
 			"dry_run":           map[string]any{"type": "boolean"},
-			"context_lines":     map[string]any{"type": "integer"},
+			"context_lines":     map[string]any{"type": "integer", "minimum": 0},
 		},
 		"required": []string{"path", "diff"},
 	}

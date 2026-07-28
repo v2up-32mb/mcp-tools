@@ -3,8 +3,10 @@ package fs
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/example/mcp-tools/internal/util"
 	iofs "io/fs"
 	"os"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/example/mcp-tools/internal/config"
 	"github.com/example/mcp-tools/internal/mcp"
+	"github.com/example/mcp-tools/internal/numconv"
 	"github.com/example/mcp-tools/internal/security"
 )
 
@@ -73,9 +76,9 @@ func writeFile(cfg config.Config) func(context.Context, mcp.CallContext, map[str
 		if err != nil {
 			return mcp.Result{}, err
 		}
-		text, ok := args["text"].(string)
-		if !ok {
-			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("text required"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		text, err := requiredStringArg(args, "text")
+		if err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "mkdir failed"})
@@ -169,11 +172,11 @@ func makeDir(cfg config.Config) func(context.Context, mcp.CallContext, map[strin
 
 func movePath(cfg config.Config) func(context.Context, mcp.CallContext, map[string]any) (mcp.Result, error) {
 	return func(_ context.Context, _ mcp.CallContext, args map[string]any) (mcp.Result, error) {
-		src, err := resolvePathArg(args, "src", cfg)
+		src, err := resolvePathNoFollowFinalArg(args, "src", cfg)
 		if err != nil {
 			return mcp.Result{}, err
 		}
-		dst, err := resolvePathArg(args, "dst", cfg)
+		dst, err := resolvePathNoFollowFinalArg(args, "dst", cfg)
 		if err != nil {
 			return mcp.Result{}, err
 		}
@@ -190,7 +193,7 @@ func movePath(cfg config.Config) func(context.Context, mcp.CallContext, map[stri
 
 func deletePath(cfg config.Config) func(context.Context, mcp.CallContext, map[string]any) (mcp.Result, error) {
 	return func(_ context.Context, _ mcp.CallContext, args map[string]any) (mcp.Result, error) {
-		path, err := resolvePathArg(args, "path", cfg)
+		path, err := resolvePathNoFollowFinalArg(args, "path", cfg)
 		if err != nil {
 			return mcp.Result{}, err
 		}
@@ -208,18 +211,30 @@ func searchText(cfg config.Config) func(context.Context, mcp.CallContext, map[st
 		if err != nil {
 			return mcp.Result{}, err
 		}
-		query, ok := args["query"].(string)
-		if !ok || strings.TrimSpace(query) == "" {
+		query, err := requiredStringArg(args, "query")
+		if err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		}
+		if query == "" {
 			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("query required"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
 		}
 		limit := 200
-		if v, ok := args["limit"].(float64); ok && v > 0 && v <= 1000 {
-			limit = int(v)
+		if v, ok, err := optionalIntArg(args, "limit"); err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		} else if ok {
+			switch {
+			case v <= 0:
+				limit = 200
+			case v > 1000:
+				limit = 1000
+			default:
+				limit = v
+			}
 		}
 
 		matches := make([]map[string]any, 0)
-		err = walkSearch(ctx, path, query, limit, &matches)
-		if err != nil {
+		err = walkSearch(ctx, path, query, limit, cfg, &matches)
+		if err != nil && !errors.Is(err, errSearchLimitReached) {
 			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "search failed"})
 		}
 		summary := fmt.Sprintf("found %d matches", len(matches))
@@ -246,24 +261,29 @@ func replaceText(cfg config.Config) func(context.Context, mcp.CallContext, map[s
 		if err != nil {
 			return mcp.Result{}, err
 		}
-		oldText, ok := args["old_text"].(string)
-		if !ok || oldText == "" {
+		oldText, err := requiredStringArg(args, "old_text")
+		if err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		}
+		if oldText == "" {
 			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("old_text required and cannot be empty"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
 		}
-		newText, ok := args["new_text"].(string)
-		if !ok {
-			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("new_text required"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		newText, err := requiredStringArg(args, "new_text")
+		if err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
 		}
-		replaceAll, _ := args["replace_all"].(bool)
+		replaceAll, _, err := optionalBoolArg(args, "replace_all")
+		if err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		}
 		expectedReplacements := -1
-		switch v := args["expected_replacements"].(type) {
-		case float64:
-			expectedReplacements = int(v)
-		case int:
+		if v, ok, err := optionalIntArg(args, "expected_replacements"); err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		} else if ok {
+			if v < 0 {
+				return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("expected_replacements must be >= 0"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+			}
 			expectedReplacements = v
-		}
-		if expectedReplacements < -1 {
-			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("expected_replacements must be >= 0"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
 		}
 
 		payload, err := os.ReadFile(path)
@@ -320,14 +340,26 @@ func editLines(cfg config.Config) func(context.Context, mcp.CallContext, map[str
 		if start <= 0 || end < start {
 			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("invalid line range"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
 		}
-		newText, ok := args["new_text"].(string)
-		if !ok {
-			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("new_text required"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		newText, err := requiredStringArg(args, "new_text")
+		if err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
 		}
-		expected, _ := args["expected_old_text"].(string)
+		expected, expectedSet, err := optionalStringArg(args, "expected_old_text")
+		if err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		}
 		contextLines := 2
-		if v, ok := args["context_lines"].(float64); ok && v >= 0 && v <= 20 {
-			contextLines = int(v)
+		if v, ok, err := optionalIntArg(args, "context_lines"); err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		} else if ok {
+			switch {
+			case v < 0:
+				return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("context_lines must be >= 0"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+			case v > 20:
+				contextLines = 20
+			default:
+				contextLines = v
+			}
 		}
 
 		payload, err := os.ReadFile(path)
@@ -340,7 +372,7 @@ func editLines(cfg config.Config) func(context.Context, mcp.CallContext, map[str
 		}
 
 		oldText := strings.Join(lines[start-1:end], "")
-		if expected != "" && expected != oldText {
+		if expectedSet && expected != oldText {
 			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("expected_old_text mismatch"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "edit precondition failed"})
 		}
 
@@ -369,20 +401,34 @@ func editLines(cfg config.Config) func(context.Context, mcp.CallContext, map[str
 }
 
 func resolvePathArg(args map[string]any, key string, cfg config.Config) (string, error) {
-	raw, ok := args[key].(string)
-	if !ok || strings.TrimSpace(raw) == "" {
+	return resolvePathArgWithMode(args, key, cfg, false)
+}
+
+func resolvePathNoFollowFinalArg(args map[string]any, key string, cfg config.Config) (string, error) {
+	return resolvePathArgWithMode(args, key, cfg, true)
+}
+
+func resolvePathArgWithMode(args map[string]any, key string, cfg config.Config, noFollowFinal bool) (string, error) {
+	raw, err := requiredStringArg(args, key)
+	if err != nil {
+		return "", mcp.WrapToolError(err, mcp.AuditData{Allowed: true, ResultDigest: "validation failed"})
+	}
+	if strings.TrimSpace(raw) == "" {
 		return "", mcp.WrapToolError(fmt.Errorf("%s required", key), mcp.AuditData{Allowed: true, ResultDigest: "validation failed"})
 	}
 	candidate := raw
 	if !filepath.IsAbs(candidate) {
 		candidate = filepath.Join(cfg.StartupDirectory, candidate)
 	}
-	var (
-		resolved string
-		err      error
-	)
+	var resolved string
 	if cfg.UnsafeAllowAll {
-		resolved, err = security.ResolvePathUnsafe(candidate)
+		if noFollowFinal {
+			resolved, err = security.ResolvePathUnsafeNoFollowFinal(candidate)
+		} else {
+			resolved, err = security.ResolvePathUnsafe(candidate)
+		}
+	} else if noFollowFinal {
+		resolved, err = security.ResolvePathNoFollowFinal(candidate, cfg.AllowedRoots)
 	} else {
 		resolved, err = security.ResolvePath(candidate, cfg.AllowedRoots)
 	}
@@ -393,7 +439,7 @@ func resolvePathArg(args map[string]any, key string, cfg config.Config) (string,
 	return resolved, nil
 }
 
-func walkSearch(ctx context.Context, path string, query string, limit int, matches *[]map[string]any) error {
+func walkSearch(ctx context.Context, path string, query string, limit int, cfg config.Config, matches *[]map[string]any) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
@@ -413,7 +459,15 @@ func walkSearch(ctx context.Context, path string, query string, limit int, match
 		if entry.IsDir() {
 			return nil
 		}
-		if err := searchSingleFile(current, query, limit, matches); err != nil {
+		searchPath := current
+		if !cfg.UnsafeAllowAll {
+			resolved, err := security.ResolvePath(current, cfg.AllowedRoots)
+			if err != nil {
+				return nil
+			}
+			searchPath = resolved
+		}
+		if err := searchSingleFile(searchPath, query, limit, matches); err != nil {
 			if errors.Is(err, errSearchLimitReached) {
 				return filepath.SkipAll
 			}
@@ -489,14 +543,26 @@ func renderLineContext(lines []string, start, end, contextLines int) string {
 	if len(lines) == 0 {
 		return ""
 	}
+	if contextLines < 0 {
+		contextLines = 0
+	}
 	if start < 1 {
 		start = 1
 	}
 	if end < start {
 		end = start
 	}
+	if start > len(lines) {
+		return ""
+	}
+	if end > len(lines) {
+		end = len(lines)
+	}
 	lower := max(1, start-contextLines)
 	upper := min(len(lines), end+contextLines)
+	if lower > upper {
+		return ""
+	}
 	rows := make([]string, 0, upper-lower+1)
 	for idx := lower; idx <= upper; idx++ {
 		marker := " "
@@ -534,13 +600,79 @@ func atomicWrite(path string, payload []byte) error {
 }
 
 func intArg(args map[string]any, key string) (int, error) {
-	switch value := args[key].(type) {
-	case float64:
-		return int(value), nil
-	case int:
-		return value, nil
-	default:
+	value, ok := args[key]
+	if !ok {
 		return 0, fmt.Errorf("%s required", key)
+	}
+	return parseInteger(value, key)
+}
+
+func optionalIntArg(args map[string]any, key string) (int, bool, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return 0, false, nil
+	}
+	parsed, err := parseInteger(value, key)
+	if err != nil {
+		return 0, true, err
+	}
+	return parsed, true, nil
+}
+
+func optionalBoolArg(args map[string]any, key string) (bool, bool, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return false, false, nil
+	}
+	parsed, ok := value.(bool)
+	if !ok {
+		return false, true, fmt.Errorf("%s must be a boolean", key)
+	}
+	return parsed, true, nil
+}
+
+func optionalStringArg(args map[string]any, key string) (string, bool, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return "", false, nil
+	}
+	parsed, ok := value.(string)
+	if !ok {
+		return "", true, fmt.Errorf("%s must be a string", key)
+	}
+	return parsed, true, nil
+}
+
+func requiredStringArg(args map[string]any, key string) (string, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return "", fmt.Errorf("%s required", key)
+	}
+	parsed, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", key)
+	}
+	return parsed, nil
+}
+
+func parseInteger(value any, key string) (int, error) {
+	switch typed := value.(type) {
+	case int:
+		return typed, nil
+	case float64:
+		parsed, err := util.ParseIntegerFloat(typed, key)
+		if err != nil {
+			return 0, err
+		}
+		return parsed, nil
+	case json.Number:
+		parsed, err := numconv.IntFromJSONNumber(typed, key)
+		if err != nil {
+			return 0, err
+		}
+		return parsed, nil
+	default:
+		return 0, fmt.Errorf("%s must be an integer", key)
 	}
 }
 
@@ -558,6 +690,9 @@ func fileMode(info os.FileInfo) string {
 	return info.Mode().String()
 }
 
+// min and max are int-specific helpers. Go 1.21+ has built-in generic
+// min/max, but this project declares go 1.20 for compatibility, so we
+// keep these local versions.
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -577,7 +712,7 @@ func schemaPath() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"path": map[string]any{"type": "string"},
+			"path": nonEmptyStringSchema(),
 		},
 		"required": []string{"path"},
 	}
@@ -588,7 +723,7 @@ func schemaPathWithText() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"path": map[string]any{"type": "string"},
+			"path": nonEmptyStringSchema(),
 			"text": map[string]any{"type": "string"},
 		},
 		"required": []string{"path", "text"},
@@ -600,8 +735,8 @@ func schemaMove() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"src": map[string]any{"type": "string"},
-			"dst": map[string]any{"type": "string"},
+			"src": nonEmptyStringSchema(),
+			"dst": nonEmptyStringSchema(),
 		},
 		"required": []string{"src", "dst"},
 	}
@@ -612,8 +747,8 @@ func schemaSearch() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"path":  map[string]any{"type": "string"},
-			"query": map[string]any{"type": "string"},
+			"path":  nonEmptyStringSchema(),
+			"query": nonEmptyStringSchema(),
 			"limit": map[string]any{"type": "integer"},
 		},
 		"required": []string{"path", "query"},
@@ -625,11 +760,11 @@ func schemaReplaceText() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"path":                  map[string]any{"type": "string"},
-			"old_text":              map[string]any{"type": "string"},
+			"path":                  nonEmptyStringSchema(),
+			"old_text":              nonEmptyStringSchema(),
 			"new_text":              map[string]any{"type": "string"},
 			"replace_all":           map[string]any{"type": "boolean"},
-			"expected_replacements": map[string]any{"type": "integer"},
+			"expected_replacements": map[string]any{"type": "integer", "minimum": 0},
 		},
 		"required": []string{"path", "old_text", "new_text"},
 	}
@@ -640,13 +775,17 @@ func schemaEditLines() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"path":              map[string]any{"type": "string"},
-			"start_line":        map[string]any{"type": "integer"},
-			"end_line":          map[string]any{"type": "integer"},
+			"path":              nonEmptyStringSchema(),
+			"start_line":        map[string]any{"type": "integer", "minimum": 1},
+			"end_line":          map[string]any{"type": "integer", "minimum": 1},
 			"new_text":          map[string]any{"type": "string"},
 			"expected_old_text": map[string]any{"type": "string"},
-			"context_lines":     map[string]any{"type": "integer"},
+			"context_lines":     map[string]any{"type": "integer", "minimum": 0},
 		},
 		"required": []string{"path", "start_line", "end_line", "new_text"},
 	}
+}
+
+func nonEmptyStringSchema() map[string]any {
+	return map[string]any{"type": "string", "minLength": 1}
 }

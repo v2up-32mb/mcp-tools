@@ -3,6 +3,7 @@ package golangx
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -17,7 +18,9 @@ import (
 
 	"github.com/example/mcp-tools/internal/config"
 	"github.com/example/mcp-tools/internal/mcp"
+	"github.com/example/mcp-tools/internal/numconv"
 	"github.com/example/mcp-tools/internal/security"
+	"github.com/example/mcp-tools/internal/util"
 )
 
 type tool struct {
@@ -111,11 +114,17 @@ func findDefinition(cfg config.Config) func(context.Context, mcp.CallContext, ma
 			return mcp.Result{}, err
 		}
 		line, err := intArg(args, "line")
-		if err != nil || line <= 0 {
+		if err != nil {
+			return mcp.Result{}, wrapNavFailure(path, &navFailure{Reason: "validation_failed", Path: path, Message: err.Error()})
+		}
+		if line <= 0 {
 			return mcp.Result{}, wrapNavFailure(path, &navFailure{Reason: "position_out_of_bounds", Path: path, Message: "line must be a positive integer"})
 		}
 		column, err := intArg(args, "column")
-		if err != nil || column <= 0 {
+		if err != nil {
+			return mcp.Result{}, wrapNavFailure(path, &navFailure{Reason: "validation_failed", Path: path, Line: line, Message: err.Error()})
+		}
+		if column <= 0 {
 			return mcp.Result{}, wrapNavFailure(path, &navFailure{Reason: "position_out_of_bounds", Path: path, Line: line, Message: "column must be a positive integer"})
 		}
 
@@ -168,31 +177,43 @@ func findDefinition(cfg config.Config) func(context.Context, mcp.CallContext, ma
 }
 
 func resolveGoPathArg(args map[string]any, key string, cfg config.Config) (string, error) {
-	raw, ok := args[key].(string)
-	if !ok || strings.TrimSpace(raw) == "" {
+	raw, err := requiredGoStringArg(args, key)
+	if err != nil {
+		return "", mcp.WrapToolErrorWithStructured(err, mcp.AuditData{Allowed: true, ResultDigest: "validation failed"}, map[string]any{"reason": "validation_failed"})
+	}
+	if strings.TrimSpace(raw) == "" {
 		return "", mcp.WrapToolErrorWithStructured(fmt.Errorf("%s required", key), mcp.AuditData{Allowed: true, ResultDigest: "validation failed"}, map[string]any{"reason": "validation_failed", "path": raw})
 	}
 	candidate := raw
 	if !filepath.IsAbs(candidate) {
 		candidate = filepath.Join(cfg.StartupDirectory, candidate)
 	}
-	var (
-		resolved string
-		err      error
-	)
+	var resolved string
 	if cfg.UnsafeAllowAll {
 		resolved, err = security.ResolvePathUnsafe(candidate)
 	} else {
 		resolved, err = security.ResolvePath(candidate, cfg.AllowedRoots)
 	}
 	if err != nil {
-		allowed := !strings.Contains(err.Error(), security.ErrPathOutsideAllowedRoots.Error())
+		allowed := !errors.Is(err, security.ErrPathOutsideAllowedRoots)
 		return "", mcp.WrapToolErrorWithStructured(fmt.Errorf("%s: %w", key, err), mcp.AuditData{TargetPath: raw, Allowed: allowed, ResultDigest: "path rejected"}, map[string]any{"reason": "path_outside_allowed_roots", "path": raw})
 	}
 	if filepath.Ext(resolved) != ".go" {
 		return "", wrapNavFailure(resolved, &navFailure{Reason: "not_go_file", Path: resolved, Message: "path must point to a .go file"})
 	}
 	return resolved, nil
+}
+
+func requiredGoStringArg(args map[string]any, key string) (string, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return "", fmt.Errorf("%s required", key)
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", key)
+	}
+	return text, nil
 }
 
 func loadGoPackageContext(ctx context.Context, resolvedPath string, needTypes bool) (*packageContext, *navFailure) {
@@ -385,7 +406,7 @@ func resolveIdentifierAtPosition(pkgCtx *packageContext, pos token.Pos) (*ast.Id
 		if !ok {
 			return true
 		}
-		if pos < ident.Pos() || pos > ident.End() {
+		if pos < ident.Pos() || pos >= ident.End() {
 			return true
 		}
 		span := int(ident.End() - ident.Pos())
@@ -500,11 +521,8 @@ func definitionLocation(cfg config.Config, pkgCtx *packageContext, obj types.Obj
 }
 
 func pathInAllowedRoots(path string, roots []string) bool {
-	cleanPath := filepath.Clean(path)
 	for _, root := range roots {
-		cleanRoot := filepath.Clean(root)
-		rel, err := filepath.Rel(cleanRoot, cleanPath)
-		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if _, err := security.ResolvePath(path, []string{root}); err == nil {
 			return true
 		}
 	}
@@ -562,7 +580,7 @@ func schemaListSymbols() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"path": map[string]any{"type": "string"},
+			"path": map[string]any{"type": "string", "minLength": 1},
 		},
 		"required": []string{"path"},
 	}
@@ -573,21 +591,35 @@ func schemaFindDefinition() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"path":   map[string]any{"type": "string"},
-			"line":   map[string]any{"type": "integer"},
-			"column": map[string]any{"type": "integer"},
+			"path":   map[string]any{"type": "string", "minLength": 1},
+			"line":   map[string]any{"type": "integer", "minimum": 1},
+			"column": map[string]any{"type": "integer", "minimum": 1},
 		},
 		"required": []string{"path", "line", "column"},
 	}
 }
 
 func intArg(args map[string]any, key string) (int, error) {
-	switch value := args[key].(type) {
-	case float64:
-		return int(value), nil
-	case int:
-		return value, nil
-	default:
+	value, ok := args[key]
+	if !ok {
 		return 0, fmt.Errorf("%s required", key)
+	}
+	switch typed := value.(type) {
+	case float64:
+		parsed, err := util.ParseIntegerFloat(typed, key)
+		if err != nil {
+			return 0, err
+		}
+		return parsed, nil
+	case json.Number:
+		parsed, err := numconv.IntFromJSONNumber(typed, key)
+		if err != nil {
+			return 0, err
+		}
+		return parsed, nil
+	case int:
+		return typed, nil
+	default:
+		return 0, fmt.Errorf("%s must be an integer", key)
 	}
 }

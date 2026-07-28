@@ -3,14 +3,17 @@ package git
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/example/mcp-tools/internal/util"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/example/mcp-tools/internal/config"
 	"github.com/example/mcp-tools/internal/mcp"
+	"github.com/example/mcp-tools/internal/numconv"
 	"github.com/example/mcp-tools/internal/security"
 )
 
@@ -69,9 +72,9 @@ func gitLog(cfg config.Config) func(context.Context, mcp.CallContext, map[string
 		if err != nil {
 			return mcp.Result{}, err
 		}
-		limit := 20
-		if value, ok := args["limit"].(float64); ok && value > 0 && value <= 200 {
-			limit = int(value)
+		limit, err := parseLogLimit(args["limit"])
+		if err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{Workdir: repo, Allowed: true, ResultDigest: "validation failed"})
 		}
 		return execGit(ctx, cfg, repo, "log", []string{"log", "--oneline", fmt.Sprintf("-%d", limit)})
 	}
@@ -119,9 +122,9 @@ func gitCommit(cfg config.Config) func(context.Context, mcp.CallContext, map[str
 		if err != nil {
 			return mcp.Result{}, err
 		}
-		message, _ := args["message"].(string)
-		if strings.TrimSpace(message) == "" {
-			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("message required"), mcp.AuditData{Workdir: repo, Allowed: true, ResultDigest: "validation failed"})
+		message, err := requiredStringArg(args, "message")
+		if err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{Workdir: repo, Allowed: true, ResultDigest: "validation failed"})
 		}
 		return execGit(ctx, cfg, repo, "commit", []string{"commit", "-m", message})
 	}
@@ -133,7 +136,10 @@ func gitSwitch(cfg config.Config) func(context.Context, mcp.CallContext, map[str
 		if err != nil {
 			return mcp.Result{}, err
 		}
-		branch, _ := args["branch"].(string)
+		branch, err := requiredStringArg(args, "branch")
+		if err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{Workdir: repo, Allowed: true, ResultDigest: "validation failed"})
+		}
 		if strings.TrimSpace(branch) == "" || strings.HasPrefix(branch, "-") || strings.ContainsAny(branch, " \t\n") {
 			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("valid branch required"), mcp.AuditData{Workdir: repo, Allowed: true, ResultDigest: "validation failed"})
 		}
@@ -151,10 +157,31 @@ func fixed(cfg config.Config, sub string, argv []string) func(context.Context, m
 	}
 }
 
+func requiredStringArg(args map[string]any, key string) (string, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return "", fmt.Errorf("%s required", key)
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", key)
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", fmt.Errorf("%s required", key)
+	}
+	return text, nil
+}
+
 func resolveRepo(ctx context.Context, cfg config.Config, args map[string]any) (string, error) {
-	raw, _ := args["repo_path"].(string)
-	if strings.TrimSpace(raw) == "" {
-		raw = cfg.StartupDirectory
+	raw := cfg.StartupDirectory
+	if value, ok := args["repo_path"]; ok && value != nil {
+		text, ok := value.(string)
+		if !ok {
+			return "", mcp.WrapToolError(fmt.Errorf("repo_path must be a string"), mcp.AuditData{Allowed: true, ResultDigest: "validation failed"})
+		}
+		if strings.TrimSpace(text) != "" {
+			raw = text
+		}
 	}
 	candidate := raw
 	if !filepath.IsAbs(candidate) {
@@ -177,7 +204,7 @@ func resolveRepo(ctx context.Context, cfg config.Config, args map[string]any) (s
 	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", mcp.WrapToolError(fmt.Errorf("repo_path is not a git repository"), mcp.AuditData{Workdir: workdir, Allowed: true, Stderr: truncate(string(output), cfg.OutputMaxBytes), ResultDigest: "repo discovery failed"})
+		return "", mcp.WrapToolError(fmt.Errorf("repo_path is not a git repository"), mcp.AuditData{Workdir: workdir, Allowed: true, Stderr: util.Truncate(string(output), cfg.OutputMaxBytes), ResultDigest: "repo discovery failed"})
 	}
 	repoRoot := strings.TrimSpace(string(output))
 	if cfg.UnsafeAllowAll {
@@ -204,8 +231,8 @@ func execGit(ctx context.Context, cfg config.Config, repo string, sub string, ar
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 	err := cmd.Run()
-	stdout := truncate(stdoutBuf.String(), cfg.OutputMaxBytes)
-	stderr := truncate(stderrBuf.String(), cfg.OutputMaxBytes)
+	stdout := util.Truncate(stdoutBuf.String(), cfg.OutputMaxBytes)
+	stderr := util.Truncate(stderrBuf.String(), cfg.OutputMaxBytes)
 	auditData := mcp.AuditData{Workdir: repo, Allowed: true, Stdout: stdout, Stderr: stderr, ResultDigest: fmt.Sprintf("git %s", sub)}
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -233,18 +260,32 @@ func execGit(ctx context.Context, cfg config.Config, repo string, sub string, ar
 }
 
 func repoRelativePaths(raw any) ([]string, error) {
-	values, ok := raw.([]any)
-	if !ok {
+	if raw == nil {
 		return nil, nil
 	}
+	var values []string
+	switch typed := raw.(type) {
+	case []string:
+		values = typed
+	case []any:
+		values = make([]string, 0, len(typed))
+		for _, value := range typed {
+			text, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("paths must be non-empty strings")
+			}
+			values = append(values, text)
+		}
+	default:
+		return nil, fmt.Errorf("paths must be an array")
+	}
 	out := make([]string, 0, len(values))
-	for _, value := range values {
-		text, ok := value.(string)
-		if !ok || strings.TrimSpace(text) == "" {
+	for _, text := range values {
+		if strings.TrimSpace(text) == "" {
 			return nil, fmt.Errorf("paths must be non-empty strings")
 		}
 		clean := filepath.Clean(text)
-		if filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." || strings.HasPrefix(clean, "-") {
+		if filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." || strings.HasPrefix(clean, "-") || strings.HasPrefix(clean, ":") {
 			return nil, fmt.Errorf("path %q must be repo-relative", text)
 		}
 		out = append(out, filepath.ToSlash(clean))
@@ -252,11 +293,40 @@ func repoRelativePaths(raw any) ([]string, error) {
 	return out, nil
 }
 
-func truncate(text string, limit int) string {
-	if len(text) <= limit {
-		return text
+func parseLogLimit(raw any) (int, error) {
+	const (
+		defaultLimit = 20
+		maxLimit     = 200
+	)
+	if raw == nil {
+		return defaultLimit, nil
 	}
-	return text[:limit] + "\n[truncated]"
+	var limit int
+	switch value := raw.(type) {
+	case int:
+		limit = value
+	case float64:
+		parsed, err := util.ParseIntegerFloat(value, "limit")
+		if err != nil {
+			return 0, err
+		}
+		limit = parsed
+	case json.Number:
+		parsed, err := numconv.IntFromJSONNumber(value, "limit")
+		if err != nil {
+			return 0, err
+		}
+		limit = parsed
+	default:
+		return 0, fmt.Errorf("limit must be an integer")
+	}
+	if limit <= 0 {
+		return 0, fmt.Errorf("limit must be > 0")
+	}
+	if limit > maxLimit {
+		return maxLimit, nil
+	}
+	return limit, nil
 }
 
 func schemaRepo() map[string]any {
@@ -270,15 +340,19 @@ func schemaRepo() map[string]any {
 }
 
 func schemaPaths(required bool) map[string]any {
+	pathsSchema := map[string]any{
+		"type":  "array",
+		"items": map[string]any{"type": "string"},
+	}
+	if required {
+		pathsSchema["minItems"] = 1
+	}
 	schema := map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"repo_path": map[string]any{"type": "string"},
-			"paths": map[string]any{
-				"type":  "array",
-				"items": map[string]any{"type": "string"},
-			},
+			"paths":     pathsSchema,
 		},
 	}
 	if required {
@@ -293,7 +367,7 @@ func schemaCommit() map[string]any {
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"repo_path": map[string]any{"type": "string"},
-			"message":   map[string]any{"type": "string"},
+			"message":   map[string]any{"type": "string", "minLength": 1},
 		},
 		"required": []string{"message"},
 	}
@@ -305,7 +379,7 @@ func schemaBranch() map[string]any {
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"repo_path": map[string]any{"type": "string"},
-			"branch":    map[string]any{"type": "string"},
+			"branch":    map[string]any{"type": "string", "minLength": 1},
 		},
 		"required": []string{"branch"},
 	}
@@ -317,7 +391,7 @@ func schemaLog() map[string]any {
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"repo_path": map[string]any{"type": "string"},
-			"limit":     map[string]any{"type": "integer"},
+			"limit":     map[string]any{"type": "integer", "minimum": 1},
 		},
 	}
 }

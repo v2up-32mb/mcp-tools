@@ -2,8 +2,11 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/example/mcp-tools/internal/util"
 	"sort"
 	"strings"
 	"sync"
@@ -11,6 +14,7 @@ import (
 
 	"github.com/example/mcp-tools/internal/applog"
 	"github.com/example/mcp-tools/internal/audit"
+	"github.com/example/mcp-tools/internal/numconv"
 )
 
 var ErrUnknownTool = errors.New("unknown tool")
@@ -118,14 +122,32 @@ func (r *Registry) List() []map[string]any {
 }
 
 func (r *Registry) Call(ctx context.Context, callCtx CallContext, name string, args map[string]any) (Result, error) {
+	started := time.Now()
 	r.mu.RLock()
 	t, ok := r.tools[name]
 	r.mu.RUnlock()
 	if !ok {
-		return Result{}, fmt.Errorf("%w: %s", ErrUnknownTool, name)
+		err := fmt.Errorf("%w: %s", ErrUnknownTool, name)
+		auditData := AuditData{Allowed: false, ResultDigest: "unknown tool"}
+		event := audit.Event{
+			Timestamp:       started.UTC(),
+			RequestID:       callCtx.RequestID,
+			SessionID:       callCtx.SessionID,
+			ProtocolVersion: callCtx.ProtocolVersion,
+			RemoteAddr:      callCtx.RemoteAddr,
+			Tool:            name,
+			Arguments:       summarizeAuditArguments(name, args),
+			Allowed:         auditData.Allowed,
+			Success:         false,
+			Error:           err.Error(),
+			DurationMS:      time.Since(started).Milliseconds(),
+			ResultDigest:    auditData.ResultDigest,
+		}
+		_ = r.auditor.Write(event)
+		logToolCallError(callCtx, name, args, event.DurationMS, &ToolError{Err: err, Audit: auditData})
+		return Result{}, err
 	}
 
-	started := time.Now()
 	result, callErr := t.Call(ctx, callCtx, args)
 	event := audit.Event{
 		Timestamp:       started.UTC(),
@@ -134,7 +156,7 @@ func (r *Registry) Call(ctx context.Context, callCtx CallContext, name string, a
 		ProtocolVersion: callCtx.ProtocolVersion,
 		RemoteAddr:      callCtx.RemoteAddr,
 		Tool:            name,
-		Arguments:       args,
+		Arguments:       summarizeAuditArguments(name, args),
 		DurationMS:      time.Since(started).Milliseconds(),
 	}
 
@@ -146,7 +168,7 @@ func (r *Registry) Call(ctx context.Context, callCtx CallContext, name string, a
 		event.Workdir = toolErr.Audit.Workdir
 		event.Stdout = toolErr.Audit.Stdout
 		event.Stderr = toolErr.Audit.Stderr
-		event.EnvKeys = cloneStrings(toolErr.Audit.EnvKeys)
+		event.EnvKeys = util.CloneStrings(toolErr.Audit.EnvKeys)
 		event.ExitCode = toolErr.Audit.ExitCode
 		event.Error = toolErr.Error()
 		event.ResultDigest = toolErr.Audit.ResultDigest
@@ -161,7 +183,7 @@ func (r *Registry) Call(ctx context.Context, callCtx CallContext, name string, a
 	event.Workdir = result.Audit.Workdir
 	event.Stdout = result.Audit.Stdout
 	event.Stderr = result.Audit.Stderr
-	event.EnvKeys = cloneStrings(result.Audit.EnvKeys)
+	event.EnvKeys = util.CloneStrings(result.Audit.EnvKeys)
 	event.ExitCode = result.Audit.ExitCode
 	event.ResultDigest = result.Audit.ResultDigest
 	_ = r.auditor.Write(event)
@@ -182,7 +204,7 @@ func ErrorResult(message string, auditData AuditData) Result {
 }
 
 func ErrorResultWithStructured(message string, structured map[string]any, auditData AuditData) Result {
-	auditData.ResultDigest = firstNonEmpty(auditData.ResultDigest, "error")
+	auditData.ResultDigest = util.FirstNonEmpty(auditData.ResultDigest, "error")
 	merged := map[string]any{"error": message}
 	for key, value := range structured {
 		merged[key] = value
@@ -210,7 +232,7 @@ func normalizeResult(result Result) Result {
 	if result.Content == nil && len(result.StructuredContent) > 0 {
 		result.Content = []TextContent{{Type: "text", Text: "ok"}}
 	}
-	result.Audit.ResultDigest = firstNonEmpty(result.Audit.ResultDigest, summarizeStructured(result.StructuredContent), "ok")
+	result.Audit.ResultDigest = util.FirstNonEmpty(result.Audit.ResultDigest, summarizeStructured(result.StructuredContent), "ok")
 	return result
 }
 
@@ -237,7 +259,13 @@ func ensureSchema(schema map[string]any) map[string]any {
 
 func humanizeTitle(name string) string {
 	replacer := strings.NewReplacer(".", " ", "_", " ", "-", " ")
-	return strings.Title(replacer.Replace(name))
+	words := strings.Fields(replacer.Replace(name))
+	for i, w := range words {
+		if len(w) > 0 {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return strings.Join(words, " ")
 }
 
 func summarizeStructured(structured map[string]any) string {
@@ -250,31 +278,13 @@ func summarizeStructured(structured map[string]any) string {
 	return "ok"
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func cloneStrings(values []string) []string {
-	if values == nil {
-		return nil
-	}
-	out := make([]string, len(values))
-	copy(out, values)
-	return out
-}
-
 func logToolCallInfo(name string, args map[string]any, durationMS int64, auditData AuditData) {
 	fields := summarizeToolFields(name, args)
 	fields = append(fields,
 		applog.Field{Key: "status", Value: "ok"},
 		applog.Field{Key: "duration_ms", Value: durationMS},
 	)
-	if summary := firstNonEmpty(auditData.ResultDigest, summarizeArgs(name, args)); summary != "" {
+	if summary := util.FirstNonEmpty(auditData.ResultDigest, name+" call"); summary != "" {
 		fields = append(fields, applog.Field{Key: "result_digest", Value: summary})
 	}
 	applog.Default().Info("mcp.tool", "tool call completed", fields...)
@@ -325,6 +335,77 @@ func summarizeToolFields(name string, args map[string]any) []applog.Field {
 	return fields
 }
 
+func summarizeAuditArguments(name string, args map[string]any) map[string]any {
+	if len(args) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(args))
+	for key, value := range args {
+		switch key {
+		case "content", "text", "old_text", "new_text", "expected_old_text", "diff":
+			if text, ok := value.(string); ok {
+				out[key] = summarizeLargeString(text)
+				continue
+			}
+		case "env":
+			if summarized, ok := summarizeEnvArgument(value); ok {
+				out[key] = summarized
+				continue
+			}
+		case "args":
+			if strings.HasPrefix(name, "exec.") {
+				if summarized, ok := summarizeSliceArgument(value); ok {
+					out[key] = summarized
+					continue
+				}
+			}
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func summarizeLargeString(value string) map[string]any {
+	sum := sha256.Sum256([]byte(value))
+	return map[string]any{
+		"redacted": true,
+		"bytes":    len(value),
+		"lines":    lineCount(value),
+		"sha256":   fmt.Sprintf("%x", sum),
+	}
+}
+
+func summarizeEnvArgument(value any) (map[string]any, bool) {
+	var keys []string
+	switch env := value.(type) {
+	case map[string]any:
+		keys = make([]string, 0, len(env))
+		for key := range env {
+			keys = append(keys, key)
+		}
+	case map[string]string:
+		keys = make([]string, 0, len(env))
+		for key := range env {
+			keys = append(keys, key)
+		}
+	default:
+		return nil, false
+	}
+	sort.Strings(keys)
+	return map[string]any{"keys": keys, "count": len(keys)}, true
+}
+
+func summarizeSliceArgument(value any) (map[string]any, bool) {
+	switch values := value.(type) {
+	case []any:
+		return map[string]any{"count": len(values)}, true
+	case []string:
+		return map[string]any{"count": len(values)}, true
+	default:
+		return nil, false
+	}
+}
+
 func appendStringField(fields []applog.Field, args map[string]any, argKey, fieldKey string) []applog.Field {
 	if value, ok := args[argKey].(string); ok && strings.TrimSpace(value) != "" {
 		fields = append(fields, applog.Field{Key: fieldKey, Value: value})
@@ -343,23 +424,48 @@ func appendIntField(fields []applog.Field, args map[string]any, argKey, fieldKey
 	case int64:
 		fields = append(fields, applog.Field{Key: fieldKey, Value: value})
 	case float64:
-		fields = append(fields, applog.Field{Key: fieldKey, Value: int(value)})
+		if parsed, ok := safeLogInt(value); ok {
+			fields = append(fields, applog.Field{Key: fieldKey, Value: parsed})
+		}
+	case json.Number:
+		if parsed, ok := safeLogJSONNumber(value); ok {
+			fields = append(fields, applog.Field{Key: fieldKey, Value: parsed})
+		}
 	}
 	return fields
 }
 
+func safeLogInt(value float64) (int, bool) {
+	return numconv.IntFromFloat64OK(value)
+}
+
+func safeLogJSONNumber(value json.Number) (int, bool) {
+	return numconv.IntFromJSONNumberOK(value)
+}
+
 func appendArgsCountField(fields []applog.Field, args map[string]any, argKey string) []applog.Field {
-	if values, ok := args[argKey].([]any); ok {
-		fields = append(fields, applog.Field{Key: "args_count", Value: len(values)})
+	if count, ok := sliceArgumentLen(args[argKey]); ok {
+		fields = append(fields, applog.Field{Key: "args_count", Value: count})
 	}
 	return fields
 }
 
 func appendPathsCountField(fields []applog.Field, args map[string]any, argKey string) []applog.Field {
-	if values, ok := args[argKey].([]any); ok {
-		fields = append(fields, applog.Field{Key: "paths_count", Value: len(values)})
+	if count, ok := sliceArgumentLen(args[argKey]); ok {
+		fields = append(fields, applog.Field{Key: "paths_count", Value: count})
 	}
 	return fields
+}
+
+func sliceArgumentLen(value any) (int, bool) {
+	switch values := value.(type) {
+	case []any:
+		return len(values), true
+	case []string:
+		return len(values), true
+	default:
+		return 0, false
+	}
 }
 
 func appendLineRangeFields(fields []applog.Field, args map[string]any) []applog.Field {
@@ -399,8 +505,4 @@ func countDiffHunks(diff string) int {
 		}
 	}
 	return count
-}
-
-func summarizeArgs(name string, args map[string]any) string {
-	return fmt.Sprintf("%s call", name)
 }

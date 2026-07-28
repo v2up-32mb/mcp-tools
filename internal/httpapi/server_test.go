@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/example/mcp-tools/internal/audit"
 	"github.com/example/mcp-tools/internal/config"
 	"github.com/example/mcp-tools/internal/mcp"
+	"github.com/example/mcp-tools/internal/session"
 	execx "github.com/example/mcp-tools/internal/tools/execx"
 	fstools "github.com/example/mcp-tools/internal/tools/fs"
 	gittools "github.com/example/mcp-tools/internal/tools/git"
@@ -116,6 +118,101 @@ func TestStatezRequiresAuth(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSSEAsyncQueueFullFallbackDoesNotExecuteToolTwice(t *testing.T) {
+	dir := t.TempDir()
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	cfg := config.Config{
+		BearerToken:        "secret",
+		AllowedRoots:       []string{dir},
+		AuditLogPath:       auditPath,
+		CommandTimeout:     5 * time.Second,
+		OutputMaxBytes:     4096,
+		StreamQueueSize:    1,
+		MaxRequestBytes:    1 << 20,
+		StartupDirectory:   dir,
+		SessionTTL:         time.Hour,
+		ServerName:         "mcp-tools-test",
+		ServerVersion:      "test",
+		SupportedProtocols: []string{config.ProtocolLatest, config.ProtocolCompat, config.ProtocolLegacy},
+	}
+	logger, err := audit.NewJSONLWriter(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+	registry := mcp.NewRegistry(logger)
+	for _, tool := range fstools.NewTools(cfg) {
+		registry.Register(tool)
+	}
+	srv := &Server{
+		cfg:      cfg,
+		registry: registry,
+		sessions: session.NewManager(cfg.SessionTTL),
+		streams:  newStreamHub(cfg.StreamQueueSize),
+		resSubs:  newResourceSubscriptions(),
+		metrics:  newServerMetrics(),
+	}
+
+	sess, err := srv.sessions.Create(config.ProtocolLatest, map[string]any{"name": "tester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := srv.streams.register(sess.ID)
+	defer srv.streams.unregister(sess.ID, stream)
+	if !srv.streams.publish(sess.ID, rpcResponse{JSONRPC: "2.0", ID: 1, Result: map[string]any{"queued": true}}) {
+		t.Fatal("failed to pre-fill stream queue")
+	}
+
+	target := filepath.Join(dir, "line.txt")
+	if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      77,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "fs.edit_lines",
+			"arguments": map[string]any{
+				"path":              target,
+				"start_line":        1,
+				"end_line":          1,
+				"expected_old_text": "old\n",
+				"new_text":          "new\n",
+			},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sess.ID)
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.handleMCP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected single-shot fallback 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	resp := parseSSEData(t, rec.Body.String())
+	if resp.Error != nil {
+		t.Fatalf("unexpected SSE RPC error: %#v", resp.Error)
+	}
+	result, ok := resp.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected tool result map, got %#v", resp.Result)
+	}
+	if result["isError"] != false {
+		t.Fatalf("expected fallback to return the first successful tool result without re-executing, got %#v", result)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new\n" {
+		t.Fatalf("unexpected file content %q", got)
 	}
 }
 
@@ -269,6 +366,41 @@ func TestStatezShowsRuntimeCountsAndCounters(t *testing.T) {
 	}
 }
 
+func TestStatezPrunesExpiredResourceSubscriptions(t *testing.T) {
+	manager := session.NewManager(time.Millisecond)
+	sess, err := manager.Create(config.ProtocolLatest, nil)
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+	srv := &Server{
+		cfg: config.Config{
+			SessionTTL:         time.Millisecond,
+			SupportedProtocols: []string{config.ProtocolLatest},
+		},
+		sessions: manager,
+		streams:  newStreamHub(1),
+		resSubs:  newResourceSubscriptions(),
+		metrics:  newServerMetrics(),
+	}
+	srv.resSubs.subscribe(sess.ID, "file:///tmp/demo.txt")
+	time.Sleep(5 * time.Millisecond)
+
+	snapshot := srv.stateSnapshot()
+	runtime := snapshot["runtime"].(map[string]any)
+	if runtime["active_sessions"].(int) != 0 {
+		t.Fatalf("expected expired session to be pruned, got %#v", runtime)
+	}
+	if runtime["resource_subscription_total"].(int) != 0 {
+		t.Fatalf("expected expired subscriptions to be pruned, got %#v", runtime)
+	}
+}
+
+func TestChooseProtocolRejectsEmptySupportedProtocols(t *testing.T) {
+	if protocol, ok := chooseProtocol("", nil); ok || protocol != "" {
+		t.Fatalf("expected empty supported protocols to be rejected, got protocol=%q ok=%t", protocol, ok)
+	}
+}
+
 func TestListToolsAfterInitialize(t *testing.T) {
 	handler, _, _ := newTestServer(t)
 	sessionID := initializeSession(t, handler)
@@ -311,6 +443,58 @@ func TestInitializeWithCombinedAcceptPrefersJSON(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "event: message") {
 		t.Fatalf("expected JSON body, got SSE body %q", rec.Body.String())
+	}
+}
+
+func TestInitializeAcceptJSONQZeroPrefersSSE(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Accept", "application/json;q=0, text/event-stream")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
+		t.Fatalf("expected SSE content type, got %q body=%s", ct, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "event: message") {
+		t.Fatalf("expected SSE body, got %q", rec.Body.String())
+	}
+}
+
+func TestInitializeRejectsNonStringProtocolVersion(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":20251125,"clientInfo":{"name":"tester","version":"1.0.0"}}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for non-string protocolVersion, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get(sessionHeader) != "" {
+		t.Fatalf("initialize should not create a session on invalid protocolVersion, got %q", rec.Header().Get(sessionHeader))
+	}
+	if !strings.Contains(rec.Body.String(), "protocolVersion must be a string") {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestInitializeRejectsNonObjectClientInfo(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":["tester"]}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for non-object clientInfo, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get(sessionHeader) != "" {
+		t.Fatalf("initialize should not create a session on invalid clientInfo, got %q", rec.Header().Get(sessionHeader))
+	}
+	if !strings.Contains(rec.Body.String(), "clientInfo must be an object") {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
 	}
 }
 
@@ -683,6 +867,152 @@ func TestResourcesReadFileAfterInitialize(t *testing.T) {
 	}
 }
 
+func TestResourcesRejectNonStringURI(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSession(t, handler)
+
+	for _, method := range []string{"resources/read", "resources/subscribe", "resources/unsubscribe"} {
+		t.Run(method, func(t *testing.T) {
+			payload := map[string]any{
+				"jsonrpc": "2.0",
+				"id":      901,
+				"method":  method,
+				"params": map[string]any{
+					"uri": 123,
+				},
+			}
+			body, _ := json.Marshal(payload)
+			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer secret")
+			req.Header.Set(sessionHeader, sessionID)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			var decoded rpcResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Error == nil || decoded.Error.Code != -32602 {
+				t.Fatalf("expected invalid params error, got %#v", decoded)
+			}
+			if !strings.Contains(decoded.Error.Message, "must be a string") {
+				t.Fatalf("expected type error, got %#v", decoded.Error)
+			}
+		})
+	}
+}
+
+func TestResourcesReadParsesStandardFileURIPath(t *testing.T) {
+	handler, dir, _ := newTestServer(t)
+	sessionID := initializeSession(t, handler)
+	target := filepath.Join(dir, "space name.txt")
+	if err := os.WriteFile(target, []byte("encoded resource\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, uri := range []string{
+		"file://" + strings.ReplaceAll(target, " ", "%20"),
+		"file://localhost" + strings.ReplaceAll(target, " ", "%20"),
+	} {
+		t.Run(uri, func(t *testing.T) {
+			payload := map[string]any{
+				"jsonrpc": "2.0",
+				"id":      92,
+				"method":  "resources/read",
+				"params": map[string]any{
+					"uri": uri,
+				},
+			}
+			body, _ := json.Marshal(payload)
+			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer secret")
+			req.Header.Set(sessionHeader, sessionID)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			result := decoded["result"].(map[string]any)
+			contents := result["contents"].([]any)
+			item := contents[0].(map[string]any)
+			if item["uri"] != localFileURI(target) {
+				t.Fatalf("expected canonical content uri, got %#v", item)
+			}
+			if item["text"] != "encoded resource\n" {
+				t.Fatalf("unexpected resource file contents: %#v", item)
+			}
+		})
+	}
+}
+
+func TestResourcesReadReturnsEscapedRoundTrippableURI(t *testing.T) {
+	handler, dir, _ := newTestServer(t)
+	sessionID := initializeSession(t, handler)
+	target := filepath.Join(dir, "frag#query?.txt")
+	if err := os.WriteFile(target, []byte("roundtrip\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inputURI := (&url.URL{Scheme: "file", Path: target}).String()
+
+	readResource := func(uri string) map[string]any {
+		t.Helper()
+		payload := map[string]any{
+			"jsonrpc": "2.0",
+			"id":      93,
+			"method":  "resources/read",
+			"params": map[string]any{
+				"uri": uri,
+			},
+		}
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer secret")
+		req.Header.Set(sessionHeader, sessionID)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("read %q: expected 200, got %d body=%s", uri, rec.Code, rec.Body.String())
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+			t.Fatal(err)
+		}
+		result := decoded["result"].(map[string]any)
+		contents := result["contents"].([]any)
+		return contents[0].(map[string]any)
+	}
+
+	item := readResource(inputURI)
+	returnedURI, _ := item["uri"].(string)
+	if returnedURI != inputURI {
+		t.Fatalf("expected escaped canonical content uri %q, got %#v", inputURI, item)
+	}
+	item = readResource(returnedURI)
+	if item["text"] != "roundtrip\n" {
+		t.Fatalf("unexpected round-tripped resource contents: %#v", item)
+	}
+}
+
+func TestParseFileResourcePathRejectsNonLocalURIParts(t *testing.T) {
+	for _, uri := range []string{
+		"file://example.com/tmp/resource.txt",
+		"file:///tmp/resource.txt?version=1",
+		"file:///tmp/resource.txt#section",
+	} {
+		t.Run(uri, func(t *testing.T) {
+			if _, err := parseFileResourcePath(uri); err == nil {
+				t.Fatal("expected invalid file resource URI to be rejected")
+			}
+		})
+	}
+}
+
 func TestResourcesReadOutsideAllowedRootsWhenUnsafeAllowAllEnabled(t *testing.T) {
 	handler, _, _ := newTestServerWithConfig(t, func(cfg *config.Config) {
 		cfg.UnsafeAllowAll = true
@@ -815,6 +1145,103 @@ func TestResourcesSubscribeAndUnsubscribe(t *testing.T) {
 	}
 }
 
+func TestResourcesUnsubscribeRejectsInvalidURI(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSession(t, handler)
+
+	for _, uri := range []string{
+		"http://example.com/resource.txt",
+		"file://example.com/tmp/resource.txt",
+		"file:///tmp/resource.txt#section",
+	} {
+		t.Run(uri, func(t *testing.T) {
+			payload := map[string]any{
+				"jsonrpc": "2.0",
+				"id":      141,
+				"method":  "resources/unsubscribe",
+				"params": map[string]any{
+					"uri": uri,
+				},
+			}
+			body, _ := json.Marshal(payload)
+			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer secret")
+			req.Header.Set(sessionHeader, sessionID)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected invalid unsubscribe URI to fail, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			var decoded rpcResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Error == nil || decoded.Error.Code != -32602 {
+				t.Fatalf("expected invalid params error, got %#v", decoded)
+			}
+		})
+	}
+}
+
+func TestResourcesSubscribeCanonicalizesEquivalentURIForUnsubscribe(t *testing.T) {
+	handler, dir, _ := newTestServer(t)
+	sessionID := initializeSession(t, handler)
+	target := filepath.Join(dir, "watch-canonical.txt")
+	if err := os.WriteFile(target, []byte("watch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nonCanonicalTarget := dir + string(filepath.Separator) + "." + string(filepath.Separator) + filepath.Base(target)
+
+	postRPC := func(payload map[string]any) {
+		t.Helper()
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer secret")
+		req.Header.Set(sessionHeader, sessionID)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s failed: %d body=%s", payload["method"], rec.Code, rec.Body.String())
+		}
+	}
+
+	postRPC(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      131,
+		"method":  "resources/subscribe",
+		"params": map[string]any{
+			"uri": "file://" + nonCanonicalTarget,
+		},
+	})
+	postRPC(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      132,
+		"method":  "resources/unsubscribe",
+		"params": map[string]any{
+			"uri": "file://" + target,
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/debug/statez", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("statez failed: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var snapshot struct {
+		Runtime struct {
+			ResourceSubscriptionTotal int `json:"resource_subscription_total"`
+		} `json:"runtime"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &snapshot); err != nil {
+		t.Fatalf("decode statez: %v", err)
+	}
+	if snapshot.Runtime.ResourceSubscriptionTotal != 0 {
+		t.Fatalf("expected canonical unsubscribe to remove subscription, got %d", snapshot.Runtime.ResourceSubscriptionTotal)
+	}
+}
+
 func TestPromptsListAfterInitialize(t *testing.T) {
 	handler, _, _ := newTestServer(t)
 	sessionID := initializeSession(t, handler)
@@ -847,6 +1274,56 @@ func TestPromptsListAfterInitialize(t *testing.T) {
 	args := first["arguments"].([]any)
 	if len(args) < 2 || args[0].(map[string]any)["name"] != "task" || args[1].(map[string]any)["name"] != "path" {
 		t.Fatalf("expected typed prompt arguments, got %#v", first)
+	}
+}
+
+func TestPromptSchemasDeclareRequiredStringMinLength(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSession(t, handler)
+
+	payload := []byte(`{"jsonrpc":"2.0","id":91,"method":"prompts/list","params":{}}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	result := body["result"].(map[string]any)
+	prompts := result["prompts"].([]any)
+	byName := make(map[string]map[string]any, len(prompts))
+	for _, raw := range prompts {
+		prompt := raw.(map[string]any)
+		byName[prompt["name"].(string)] = prompt
+	}
+	tests := []struct {
+		prompt string
+		prop   string
+	}{
+		{prompt: "safe_file_edit", prop: "task"},
+		{prompt: "safe_file_edit", prop: "path"},
+		{prompt: "go_dev_loop", prop: "goal"},
+		{prompt: "go_dev_loop", prop: "workdir"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.prompt+"."+tt.prop, func(t *testing.T) {
+			prompt, ok := byName[tt.prompt]
+			if !ok {
+				t.Fatalf("prompt %q not found in %#v", tt.prompt, byName)
+			}
+			meta := prompt["_meta"].(map[string]any)
+			inputSchema := meta["inputSchema"].(map[string]any)
+			properties := inputSchema["properties"].(map[string]any)
+			prop := properties[tt.prop].(map[string]any)
+			if got, ok := prop["minLength"].(float64); !ok || got != 1 {
+				t.Fatalf("%s schema should declare %s minLength=1, got %#v", tt.prompt, tt.prop, prop)
+			}
+		})
 	}
 }
 
@@ -893,6 +1370,146 @@ func TestPromptGetAfterInitialize(t *testing.T) {
 	}
 }
 
+func TestPromptGetRejectsNonStringExpectedOldText(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSession(t, handler)
+
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      10,
+		"method":  "prompts/get",
+		"params": map[string]any{
+			"name": "safe_file_edit",
+			"arguments": map[string]any{
+				"task":              "update readme",
+				"path":              "README.md",
+				"expected_old_text": 123,
+			},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	msg := decoded["error"].(map[string]any)["message"].(string)
+	if !strings.Contains(msg, "expected_old_text must be a string") {
+		t.Fatalf("unexpected error message: %q", msg)
+	}
+}
+
+func TestPromptGetRejectsNonBooleanRunVet(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSession(t, handler)
+
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      11,
+		"method":  "prompts/get",
+		"params": map[string]any{
+			"name": "go_dev_loop",
+			"arguments": map[string]any{
+				"goal":        "fix tests",
+				"workdir":     ".",
+				"test_target": "./internal/httpapi",
+				"run_vet":     "false",
+			},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	msg := decoded["error"].(map[string]any)["message"].(string)
+	if !strings.Contains(msg, "run_vet must be a boolean") {
+		t.Fatalf("unexpected error message: %q", msg)
+	}
+}
+
+func TestPromptGetRejectsNonObjectArguments(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSession(t, handler)
+
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      13,
+		"method":  "prompts/get",
+		"params": map[string]any{
+			"name":      "go_dev_loop",
+			"arguments": []any{"not", "an", "object"},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	msg := decoded["error"].(map[string]any)["message"].(string)
+	if !strings.Contains(msg, "arguments must be an object") {
+		t.Fatalf("unexpected error message: %q", msg)
+	}
+}
+
+func TestPromptGetRejectsNonStringName(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSession(t, handler)
+
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      13,
+		"method":  "prompts/get",
+		"params": map[string]any{
+			"name": []any{"go_dev_loop"},
+			"arguments": map[string]any{
+				"goal":    "fix tests",
+				"workdir": "/tmp/work",
+			},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	msg := decoded["error"].(map[string]any)["message"].(string)
+	if !strings.Contains(msg, "prompt name must be a string") {
+		t.Fatalf("unexpected error message: %q", msg)
+	}
+}
+
 func TestCompletionCompleteForPromptPath(t *testing.T) {
 	handler, dir, _ := newTestServer(t)
 	sessionID := initializeSession(t, handler)
@@ -934,6 +1551,222 @@ func TestCompletionCompleteForPromptPath(t *testing.T) {
 	}
 }
 
+func TestCompletionCompleteRejectsNonStringArgumentValue(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSession(t, handler)
+
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      12,
+		"method":  "completion/complete",
+		"params": map[string]any{
+			"ref": map[string]any{
+				"type": "ref/prompt",
+				"name": "safe_file_edit",
+			},
+			"argument": map[string]any{
+				"name":  "path",
+				"value": 123,
+			},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	msg := decoded["error"].(map[string]any)["message"].(string)
+	if !strings.Contains(msg, "argument.value must be a string") {
+		t.Fatalf("unexpected error message: %q", msg)
+	}
+}
+
+func TestCompletionCompleteRejectsNonStringContextWorkdir(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSession(t, handler)
+
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      13,
+		"method":  "completion/complete",
+		"params": map[string]any{
+			"ref": map[string]any{
+				"type": "ref/prompt",
+				"name": "go_dev_loop",
+			},
+			"argument": map[string]any{
+				"name":  "test_target",
+				"value": "./",
+			},
+			"context": map[string]any{
+				"arguments": map[string]any{
+					"workdir": 123,
+				},
+			},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	msg := decoded["error"].(map[string]any)["message"].(string)
+	if !strings.Contains(msg, "context.arguments.workdir must be a string") {
+		t.Fatalf("unexpected error message: %q", msg)
+	}
+}
+
+func TestCompletionCompleteAllowsNullContextWorkdir(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSession(t, handler)
+
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      14,
+		"method":  "completion/complete",
+		"params": map[string]any{
+			"ref": map[string]any{
+				"type": "ref/prompt",
+				"name": "go_dev_loop",
+			},
+			"argument": map[string]any{
+				"name":  "test_target",
+				"value": "./",
+			},
+			"context": map[string]any{
+				"arguments": map[string]any{
+					"workdir": nil,
+				},
+			},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["error"] != nil {
+		t.Fatalf("expected success, got %#v", decoded)
+	}
+}
+
+func TestCompletionCompleteRejectsNonObjectContainers(t *testing.T) {
+	tests := []struct {
+		name    string
+		params  map[string]any
+		wantMsg string
+	}{
+		{
+			name: "ref",
+			params: map[string]any{
+				"ref": []any{"not", "an", "object"},
+				"argument": map[string]any{
+					"name":  "path",
+					"value": "REA",
+				},
+			},
+			wantMsg: "ref must be an object",
+		},
+		{
+			name: "argument",
+			params: map[string]any{
+				"ref": map[string]any{
+					"type": "ref/prompt",
+					"name": "safe_file_edit",
+				},
+				"argument": []any{"not", "an", "object"},
+			},
+			wantMsg: "argument must be an object",
+		},
+		{
+			name: "context",
+			params: map[string]any{
+				"ref": map[string]any{
+					"type": "ref/prompt",
+					"name": "go_dev_loop",
+				},
+				"argument": map[string]any{
+					"name":  "test_target",
+					"value": "./",
+				},
+				"context": []any{"not", "an", "object"},
+			},
+			wantMsg: "context must be an object",
+		},
+		{
+			name: "context arguments",
+			params: map[string]any{
+				"ref": map[string]any{
+					"type": "ref/prompt",
+					"name": "go_dev_loop",
+				},
+				"argument": map[string]any{
+					"name":  "test_target",
+					"value": "./",
+				},
+				"context": map[string]any{
+					"arguments": []any{"not", "an", "object"},
+				},
+			},
+			wantMsg: "context.arguments must be an object",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler, _, _ := newTestServer(t)
+			sessionID := initializeSession(t, handler)
+
+			payload := map[string]any{
+				"jsonrpc": "2.0",
+				"id":      14,
+				"method":  "completion/complete",
+				"params":  tt.params,
+			}
+			body, _ := json.Marshal(payload)
+			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer secret")
+			req.Header.Set(sessionHeader, sessionID)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			msg := decoded["error"].(map[string]any)["message"].(string)
+			if !strings.Contains(msg, tt.wantMsg) {
+				t.Fatalf("expected %q, got %q", tt.wantMsg, msg)
+			}
+		})
+	}
+}
+
 func TestCompletionCompleteForResourceTemplate(t *testing.T) {
 	handler, dir, _ := newTestServer(t)
 	sessionID := initializeSession(t, handler)
@@ -972,6 +1805,75 @@ func TestCompletionCompleteForResourceTemplate(t *testing.T) {
 	values := decoded["result"].(map[string]any)["completion"].(map[string]any)["values"].([]any)
 	if len(values) == 0 || values[0].(string) != "alpha.txt" {
 		t.Fatalf("unexpected resource completion values: %#v", values)
+	}
+}
+
+func TestCompleteRelativePathRejectsTraversalPrefix(t *testing.T) {
+	root := t.TempDir()
+	outsideName := filepath.Base(root) + "-outside"
+	outside := filepath.Join(filepath.Dir(root), outsideName)
+	t.Cleanup(func() { _ = os.RemoveAll(outside) })
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := completeRelativePath(root, "../"+outsideName+"/se", false)
+	if len(got) != 0 {
+		t.Fatalf("expected traversal completion to be rejected, got %#v", got)
+	}
+}
+
+func TestCompleteRelativePathListsDirectoryPrefixChildren(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "guide.md"), []byte("guide\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := completeRelativePath(root, "docs/", false)
+	if len(got) != 1 || got[0] != "docs/guide.md" {
+		t.Fatalf("unexpected directory completion values: %#v", got)
+	}
+}
+
+func TestCompleteRelativePathPreservesWhitespacePrefix(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, " spaced.txt"), []byte("space\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "alpha.txt"), []byte("alpha\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := completeRelativePath(root, " ", false)
+	if len(got) != 1 || got[0] != " spaced.txt" {
+		t.Fatalf("unexpected whitespace prefix completion values: %#v", got)
+	}
+}
+
+func TestCompleteGoTestTargetResolvesWorkdirAgainstStartupDirectory(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{
+		filepath.Join(root, "pkg", "sub"),
+		filepath.Join(root, "other"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := &Server{cfg: config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+	}}
+
+	got := srv.completeGoTestTarget("pkg", "./")
+	if len(got) != 2 || got[0] != "./..." || got[1] != "./sub/..." {
+		t.Fatalf("unexpected go test target completions: %#v", got)
 	}
 }
 
@@ -1058,6 +1960,305 @@ func TestRequestBodyTooLargeRejected(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRequestWithTrailingJSONRejected(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	body := `{"jsonrpc":"2.0","id":1,"method":"ping"} {"jsonrpc":"2.0","id":2,"method":"ping"}`
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	errObj := decoded["error"].(map[string]any)
+	if errObj["code"].(float64) != -32700 {
+		t.Fatalf("expected parse error code, got %#v", errObj)
+	}
+}
+
+func TestParseErrorResponseIncludesNullID(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	id, ok := decoded["id"]
+	if !ok {
+		t.Fatalf("expected parse error response to include id:null, got %#v", decoded)
+	}
+	if id != nil {
+		t.Fatalf("expected id:null, got %#v", id)
+	}
+}
+
+func TestRequestRejectsTopLevelArrayAsInvalidRequest(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`[{"jsonrpc":"2.0","id":56,"method":"ping"}]`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["id"] != nil {
+		t.Fatalf("top-level array should produce id:null, got %#v", decoded["id"])
+	}
+	errObj := decoded["error"].(map[string]any)
+	if errObj["code"].(float64) != -32600 {
+		t.Fatalf("expected invalid request code, got %#v", errObj)
+	}
+}
+
+func TestRequestMissingMethodRejectedAsInvalidRequest(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	for _, body := range []string{
+		`{"jsonrpc":"2.0","id":55,"params":{}}`,
+		`{"jsonrpc":"2.0","id":55,"method":"","params":{}}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(body))
+			req.Header.Set("Authorization", "Bearer secret")
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded["id"].(float64) != 55 {
+				t.Fatalf("expected id to be preserved, got %#v", decoded)
+			}
+			errObj := decoded["error"].(map[string]any)
+			if errObj["code"].(float64) != -32600 {
+				t.Fatalf("expected invalid request code, got %#v", errObj)
+			}
+		})
+	}
+}
+
+func TestRequestRejectsMissingIDForNonNotification(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","method":"ping","params":{}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["id"] != nil {
+		t.Fatalf("missing id should produce id:null, got %#v", decoded["id"])
+	}
+	errObj := decoded["error"].(map[string]any)
+	if errObj["code"].(float64) != -32600 {
+		t.Fatalf("expected invalid request code, got %#v", errObj)
+	}
+}
+
+func TestRequestRejectsInvalidIDType(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	for _, body := range []string{
+		`{"jsonrpc":"2.0","id":{},"method":"ping","params":{}}`,
+		`{"jsonrpc":"2.0","id":[],"method":"ping","params":{}}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(body))
+			req.Header.Set("Authorization", "Bearer secret")
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded["id"] != nil {
+				t.Fatalf("invalid id type should produce id:null, got %#v", decoded["id"])
+			}
+			errObj := decoded["error"].(map[string]any)
+			if errObj["code"].(float64) != -32600 {
+				t.Fatalf("expected invalid request code, got %#v", errObj)
+			}
+		})
+	}
+}
+
+func TestRequestRejectsUnsupportedJSONRPCVersionAsInvalidRequest(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"1.0","id":77,"method":"ping","params":{}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	id, ok := decoded["id"].(float64)
+	if !ok || id != 77 {
+		t.Fatalf("expected id to be preserved, got %#v", decoded)
+	}
+	errObj := decoded["error"].(map[string]any)
+	if errObj["code"].(float64) != -32600 {
+		t.Fatalf("expected invalid request code, got %#v", errObj)
+	}
+}
+
+func TestRequestRejectsMissingJSONRPCAsInvalidRequest(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"id":76,"method":"ping","params":{}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	id, ok := decoded["id"].(float64)
+	if !ok || id != 76 {
+		t.Fatalf("expected id to be preserved, got %#v", decoded)
+	}
+	errObj := decoded["error"].(map[string]any)
+	if errObj["code"].(float64) != -32600 {
+		t.Fatalf("expected invalid request code, got %#v", errObj)
+	}
+}
+
+func TestRequestPreservesLargeNumericID(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":9007199254740993,"method":"ping","params":{}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"id":9007199254740993`) {
+		t.Fatalf("expected large numeric id to be preserved exactly, got %s", body)
+	}
+}
+
+func TestDecodeRequestPreservesParamNumbersAsJSONNumber(t *testing.T) {
+	req, err := decodeRequest(bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"limit":9007199254740992.5}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := req.Params["limit"].(json.Number)
+	if !ok {
+		t.Fatalf("expected params number to decode as json.Number, got %T %#v", req.Params["limit"], req.Params["limit"])
+	}
+	if got.String() != "9007199254740992.5" {
+		t.Fatalf("expected exact numeric token, got %q", got.String())
+	}
+}
+
+func TestRequestRejectsNonStringJSONRPCAsInvalidRequest(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":2,"id":80,"method":"ping","params":{}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	id, ok := decoded["id"].(float64)
+	if !ok || id != 80 {
+		t.Fatalf("expected id to be preserved, got %#v", decoded)
+	}
+	errObj := decoded["error"].(map[string]any)
+	if errObj["code"].(float64) != -32600 {
+		t.Fatalf("expected invalid request code, got %#v", errObj)
+	}
+}
+
+func TestRequestRejectsNonStringMethodAsInvalidRequest(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":79,"method":123,"params":{}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	id, ok := decoded["id"].(float64)
+	if !ok || id != 79 {
+		t.Fatalf("expected id to be preserved, got %#v", decoded)
+	}
+	errObj := decoded["error"].(map[string]any)
+	if errObj["code"].(float64) != -32600 {
+		t.Fatalf("expected invalid request code, got %#v", errObj)
+	}
+}
+
+func TestRequestRejectsNonObjectParamsAsInvalidParams(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":78,"method":"ping","params":[]}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	id, ok := decoded["id"].(float64)
+	if !ok || id != 78 {
+		t.Fatalf("expected id to be preserved, got %#v", decoded)
+	}
+	errObj := decoded["error"].(map[string]any)
+	if errObj["code"].(float64) != -32602 {
+		t.Fatalf("expected invalid params code, got %#v", errObj)
 	}
 }
 
@@ -1217,6 +2418,31 @@ func TestOriginRejectedWhenNotAllowed(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCORSAllowsProtocolVersionHeader(t *testing.T) {
+	handler, _, _ := newTestServerWithConfig(t, func(cfg *config.Config) {
+		cfg.AllowedOrigins = []string{"https://ui.example"}
+	})
+	req := httptest.NewRequest(http.MethodOptions, "/mcp", nil)
+	req.Header.Set("Origin", "https://ui.example")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	allowedHeaders := rec.Header().Get("Access-Control-Allow-Headers")
+	for _, header := range []string{sessionHeader, protocolHeader} {
+		if !strings.Contains(allowedHeaders, header) {
+			t.Fatalf("expected CORS headers to allow %s, got %q", header, allowedHeaders)
+		}
+	}
+	exposedHeaders := rec.Header().Get("Access-Control-Expose-Headers")
+	for _, header := range []string{sessionHeader, protocolHeader} {
+		if !strings.Contains(exposedHeaders, header) {
+			t.Fatalf("expected CORS headers to expose %s, got %q", header, exposedHeaders)
+		}
 	}
 }
 
@@ -1433,6 +2659,105 @@ func TestStatezCountsTemplateConfirmationBlocked(t *testing.T) {
 	blockedPerTemplate := metrics["blocked_per_template"].(map[string]any)
 	if blockedPerTemplate["cleanup"].(float64) < 1 {
 		t.Fatalf("expected cleanup blocked counter, got %#v", blockedPerTemplate)
+	}
+}
+
+func TestTemplateMetricsDoNotCountUnrelatedErrorsAsConfirmationBlocked(t *testing.T) {
+	srv := &Server{
+		cfg: config.Config{
+			CommandTemplates: map[string]config.CommandTemplate{
+				"cleanup": {RequiresConfirmation: true},
+			},
+		},
+		metrics: newServerMetrics(),
+	}
+
+	srv.trackTemplateCall("exec.run_template", map[string]any{
+		"template": "cleanup",
+	}, mcp.ErrorResult("workdir not allowed for template", mcp.AuditData{}))
+
+	metrics := srv.metrics.templateSnapshot()
+	if metrics["confirmation_blocked"].(int64) != 0 {
+		t.Fatalf("unexpected confirmation_blocked for unrelated error: %#v", metrics)
+	}
+	blockedPerTemplate := metrics["blocked_per_template"].(map[string]int64)
+	if blockedPerTemplate["cleanup"] != 0 {
+		t.Fatalf("unexpected cleanup blocked counter: %#v", blockedPerTemplate)
+	}
+}
+
+func TestAsyncSSETemplateCallUpdatesTemplateMetrics(t *testing.T) {
+	handler, _, _ := newTestServerWithConfig(t, func(cfg *config.Config) {
+		cfg.CommandTemplates = map[string]config.CommandTemplate{
+			"cleanup": {
+				Command:              []string{"pwd"},
+				Category:             "cleanup",
+				Destructive:          true,
+				RequiresConfirmation: true,
+				Timeout:              5 * time.Second,
+			},
+		}
+	})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	sessionID := initializeSessionHTTP(t, ts.URL)
+	events, errs, cancel := startRawSSEStreamBuffered(t, ts.URL, sessionID, 4)
+	defer cancel()
+
+	resp := asyncSSEPost(t, ts.URL, sessionID, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2002,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "exec.run_template",
+			"arguments": map[string]any{
+				"template": "cleanup",
+				"workdir":  ".",
+			},
+		},
+	})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected async 202, got %d", resp.StatusCode)
+	}
+
+	select {
+	case evt := <-events:
+		if id, ok := evt["id"].(float64); !ok || int(id) != 2002 {
+			t.Fatalf("unexpected async response: %#v", evt)
+		}
+		result := evt["result"].(map[string]any)
+		if result["isError"] != true {
+			t.Fatalf("expected template call error result, got %#v", result)
+		}
+	case err := <-errs:
+		t.Fatalf("stream read failed: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for async template response")
+	}
+
+	stateReq, err := http.NewRequest(http.MethodGet, ts.URL+"/debug/statez", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateReq.Header.Set("Authorization", "Bearer secret")
+	stateResp, err := http.DefaultClient.Do(stateReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stateResp.Body.Close()
+	var snapshot map[string]any
+	if err := json.NewDecoder(stateResp.Body).Decode(&snapshot); err != nil {
+		t.Fatal(err)
+	}
+	metrics := snapshot["template_metrics"].(map[string]any)
+	if metrics["confirmation_blocked"].(float64) < 1 {
+		t.Fatalf("expected async confirmation_blocked >= 1, got %#v", metrics)
+	}
+	blockedPerTemplate := metrics["blocked_per_template"].(map[string]any)
+	if blockedPerTemplate["cleanup"].(float64) < 1 {
+		t.Fatalf("expected async cleanup blocked counter, got %#v", blockedPerTemplate)
 	}
 }
 

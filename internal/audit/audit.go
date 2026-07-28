@@ -2,6 +2,7 @@ package audit
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,11 @@ import (
 	"time"
 )
 
+// Event represents a single auditable tool invocation. Sensitive argument
+// fields (content, text, old_text, new_text, expected_old_text, diff) are
+// redacted by the mcp package's summarizeAuditArguments before being stored
+// here as sha256 digests; only non-sensitive metadata is preserved verbatim.
+// Env values are stored as key names only (EnvKeys), never values.
 type Event struct {
 	Timestamp       time.Time      `json:"timestamp"`
 	RequestID       string         `json:"request_id,omitempty"`
@@ -79,6 +85,9 @@ func NewJSONLWriterWithOptions(path string, opts RotateOptions) (*JSONLWriter, e
 func (w *JSONLWriter) Write(ev Event) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.f == nil {
+		return errors.New("audit writer is closed")
+	}
 	payload, err := json.Marshal(ev)
 	if err != nil {
 		return err
@@ -98,7 +107,9 @@ func (w *JSONLWriter) Close() error {
 	if w.f == nil {
 		return nil
 	}
-	return w.f.Close()
+	err := w.f.Close()
+	w.f = nil
+	return err
 }
 
 func (w *JSONLWriter) rotateIfNeeded(incomingBytes int64) error {
@@ -111,32 +122,48 @@ func (w *JSONLWriter) rotateIfNeeded(incomingBytes int64) error {
 	if err := w.f.Close(); err != nil {
 		return err
 	}
+	w.f = nil
 	for idx := w.rotate.MaxBackups; idx >= 1; idx-- {
 		src := fmt.Sprintf("%s.%d", w.path, idx)
 		if idx == w.rotate.MaxBackups {
 			if err := os.Remove(src); err != nil && !os.IsNotExist(err) {
-				return err
+				return w.reopenAfterRotateError(err)
 			}
 			continue
 		}
 		dst := fmt.Sprintf("%s.%d", w.path, idx+1)
 		if err := os.Rename(src, dst); err != nil && !os.IsNotExist(err) {
-			return err
+			return w.reopenAfterRotateError(err)
 		}
 	}
 	if err := os.Rename(w.path, w.path+".1"); err != nil && !os.IsNotExist(err) {
-		return err
+		return w.reopenAfterRotateError(err)
 	}
 	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
-		return err
+		return w.reopenAfterRotateError(err)
 	}
 	info, err := f.Stat()
 	if err != nil {
 		_ = f.Close()
-		return err
+		return w.reopenAfterRotateError(err)
 	}
 	w.f = f
 	w.currentSize = info.Size()
 	return nil
+}
+
+func (w *JSONLWriter) reopenAfterRotateError(rotateErr error) error {
+	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("%w; additionally reopen audit log: %v", rotateErr, err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return fmt.Errorf("%w; additionally stat reopened audit log: %v", rotateErr, err)
+	}
+	w.f = f
+	w.currentSize = info.Size()
+	return rotateErr
 }

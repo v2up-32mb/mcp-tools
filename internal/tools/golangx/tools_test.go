@@ -2,6 +2,7 @@ package golangx
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -34,6 +35,18 @@ func findTool(t *testing.T, cfg config.Config, name string) mcp.Tool {
 	}
 	t.Fatalf("tool %s not found", name)
 	return nil
+}
+
+func TestFindDefinitionSchemaDeclaresPositiveLineAndColumn(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "go.find_definition")
+	props := tool.Schema()["properties"].(map[string]any)
+	for _, name := range []string{"line", "column"} {
+		prop := props[name].(map[string]any)
+		if got, ok := prop["minimum"].(int); !ok || got != 1 {
+			t.Fatalf("go.find_definition schema should declare %s minimum=1, got %#v", name, prop)
+		}
+	}
 }
 
 func writeModuleFile(t *testing.T, root string, rel string, content string) string {
@@ -127,6 +140,46 @@ func TestListSymbolsRejectsNonGoFile(t *testing.T) {
 	}
 }
 
+func TestGoToolsRejectNonStringPath(t *testing.T) {
+	cfg := newTestConfig(t)
+	tests := []struct {
+		name string
+		tool string
+		args map[string]any
+	}{
+		{
+			name: "list symbols",
+			tool: "go.list_symbols",
+			args: map[string]any{"path": []any{"sample.go"}},
+		},
+		{
+			name: "find definition",
+			tool: "go.find_definition",
+			args: map[string]any{"path": 123, "line": 1, "column": 1},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tool := findTool(t, cfg, tt.tool)
+			_, err := tool.Call(context.Background(), mcp.CallContext{}, tt.args)
+			if err == nil {
+				t.Fatal("expected non-string path to be rejected")
+			}
+			if !strings.Contains(err.Error(), "path must be a string") {
+				t.Fatalf("expected type error, got %v", err)
+			}
+			var toolErr *mcp.ToolError
+			if !errors.As(err, &toolErr) {
+				t.Fatalf("expected ToolError, got %T", err)
+			}
+			if toolErr.StructuredContent["reason"] != "validation_failed" {
+				t.Fatalf("unexpected structured error: %#v", toolErr.StructuredContent)
+			}
+		})
+	}
+}
+
 func TestFindDefinitionResolvesSamePackageOtherFile(t *testing.T) {
 	cfg := newTestConfig(t)
 	tool := findTool(t, cfg, "go.find_definition")
@@ -163,6 +216,90 @@ func Use() {
 	}
 	if res.StructuredContent["in_allowed_roots"] != true {
 		t.Fatalf("expected in_allowed_roots=true, got %#v", res.StructuredContent)
+	}
+}
+
+func TestFindDefinitionRejectsFractionalPosition(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "go.find_definition")
+	writeModuleFile(t, cfg.StartupDirectory, "go.mod", "module example.com/navtest\n\ngo 1.20\n")
+	writeModuleFile(t, cfg.StartupDirectory, "sample.go", "package sample\n\nfunc Use() {}\n")
+
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":   "sample.go",
+		"line":   1.5,
+		"column": float64(1),
+	})
+	if err == nil {
+		t.Fatal("expected fractional line to be rejected")
+	}
+
+	_, err = tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":   "sample.go",
+		"line":   1e100,
+		"column": float64(1),
+	})
+	if err == nil {
+		t.Fatal("expected out-of-range line to be rejected")
+	}
+
+	_, err = tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":   "sample.go",
+		"line":   json.Number("9007199254740992.5"),
+		"column": json.Number("1"),
+	})
+	if err == nil {
+		t.Fatal("expected fractional JSON number line to be rejected")
+	}
+}
+
+func TestFindDefinitionRejectsNonIntegerPositionWithValidationReason(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "go.find_definition")
+	writeModuleFile(t, cfg.StartupDirectory, "sample.go", "package sample\n\nfunc Use() {}\n")
+
+	tests := []struct {
+		name    string
+		args    map[string]any
+		wantErr string
+	}{
+		{
+			name: "line",
+			args: map[string]any{
+				"path":   "sample.go",
+				"line":   "1",
+				"column": 1,
+			},
+			wantErr: "line must be an integer",
+		},
+		{
+			name: "column",
+			args: map[string]any{
+				"path":   "sample.go",
+				"line":   1,
+				"column": "1",
+			},
+			wantErr: "column must be an integer",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tool.Call(context.Background(), mcp.CallContext{}, tt.args)
+			if err == nil {
+				t.Fatal("expected non-integer position to be rejected")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("want %q, got %v", tt.wantErr, err)
+			}
+			var toolErr *mcp.ToolError
+			if !errors.As(err, &toolErr) {
+				t.Fatalf("expected ToolError, got %T", err)
+			}
+			if toolErr.StructuredContent["reason"] != "validation_failed" {
+				t.Fatalf("unexpected structured error: %#v", toolErr.StructuredContent)
+			}
+		})
 	}
 }
 
@@ -282,6 +419,38 @@ func Helper() {}
 	})
 	if err == nil {
 		t.Fatal("expected identifier_not_found error")
+	}
+	var toolErr *mcp.ToolError
+	if !errors.As(err, &toolErr) {
+		t.Fatalf("expected ToolError, got %T", err)
+	}
+	if toolErr.StructuredContent["reason"] != "identifier_not_found" {
+		t.Fatalf("unexpected structured error: %#v", toolErr.StructuredContent)
+	}
+}
+
+func TestFindDefinitionRejectsPositionImmediatelyAfterIdentifier(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "go.find_definition")
+	writeModuleFile(t, cfg.StartupDirectory, "go.mod", "module example.com/navtest\n\ngo 1.20\n")
+	content := `package sample
+
+func Use() {
+	Helper()
+}
+
+func Helper() {}
+`
+	writeModuleFile(t, cfg.StartupDirectory, "main.go", content)
+	line, column := lineColumnOf(t, content, "Helper")
+
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":   "main.go",
+		"line":   line,
+		"column": column + len("Helper"),
+	})
+	if err == nil {
+		t.Fatal("expected position immediately after identifier to be rejected")
 	}
 	var toolErr *mcp.ToolError
 	if !errors.As(err, &toolErr) {

@@ -3,7 +3,9 @@ package execx
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/example/mcp-tools/internal/util"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/example/mcp-tools/internal/config"
 	"github.com/example/mcp-tools/internal/mcp"
+	"github.com/example/mcp-tools/internal/numconv"
 	"github.com/example/mcp-tools/internal/security"
 )
 
@@ -22,6 +25,7 @@ var blockedFlags = map[string]bool{
 
 var inlineValueAllowedFlags = map[string]bool{
 	"-run":          true,
+	"-skip":         true,
 	"-count":        true,
 	"-timeout":      true,
 	"-tags":         true,
@@ -59,11 +63,11 @@ func (configuredTool) Schema() map[string]any {
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"preset":               map[string]any{"type": "string"},
-			"command":              map[string]any{"type": "string"},
-			"workdir":              map[string]any{"type": "string"},
+			"command":              map[string]any{"type": "string", "minLength": 1},
+			"workdir":              map[string]any{"type": "string", "minLength": 1},
 			"args":                 map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			"env":                  map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
-			"timeout_override_sec": map[string]any{"type": "integer"},
+			"timeout_override_sec": map[string]any{"type": "integer", "minimum": 1},
 		},
 		"required": []string{"workdir"},
 	}
@@ -75,13 +79,13 @@ func (t templateTool) Description() string {
 	parts := make([]string, 0, len(names))
 	for _, name := range names {
 		tpl := t.cfg.CommandTemplates[name]
-		parts = append(parts, fmt.Sprintf("%s(category=%s,destructive=%t,requires_confirmation=%t,read_only=%t)", name, firstNonEmpty(tpl.Category, "uncategorized"), tpl.Destructive, tpl.RequiresConfirmation, tpl.ReadOnly))
+		parts = append(parts, fmt.Sprintf("%s(category=%s,destructive=%t,requires_confirmation=%t,read_only=%t)", name, util.FirstNonEmpty(tpl.Category, "uncategorized"), tpl.Destructive, tpl.RequiresConfirmation, tpl.ReadOnly))
 	}
 	detail := strings.Join(parts, ", ")
 	if detail == "" {
 		detail = "no templates configured"
 	}
-	return "Run a configured command template inside an allowed working directory. The template provides a fixed argv; clients may only choose template name, workdir, and an optional timeout override that can only shorten execution. Available templates: " + detail + "."
+	return "Run a configured command template inside an allowed working directory. The template provides a fixed argv; clients may only choose template name, workdir, an optional timeout override that can only shorten execution, and confirm=true when required. Available templates: " + detail + "."
 }
 func (templateTool) ReadOnly() bool { return false }
 func (t templateTool) Schema() map[string]any {
@@ -91,12 +95,13 @@ func (t templateTool) Schema() map[string]any {
 		"properties": map[string]any{
 			"template": map[string]any{
 				"type":        "string",
+				"minLength":   1,
 				"enum":        sortedTemplateNames(t.cfg.CommandTemplates),
 				"description": templateSummaryForSchema(t.cfg.CommandTemplates),
 			},
-			"workdir":              map[string]any{"type": "string"},
+			"workdir":              map[string]any{"type": "string", "minLength": 1},
 			"confirm":              map[string]any{"type": "boolean"},
-			"timeout_override_sec": map[string]any{"type": "integer"},
+			"timeout_override_sec": map[string]any{"type": "integer", "minimum": 1},
 		},
 		"required":            []string{"template", "workdir"},
 		"x-template-metadata": summarizeTemplateMetadata(t.cfg.CommandTemplates),
@@ -104,7 +109,10 @@ func (t templateTool) Schema() map[string]any {
 }
 
 func (t templateTool) Call(ctx context.Context, _ mcp.CallContext, args map[string]any) (mcp.Result, error) {
-	templateName, _ := args["template"].(string)
+	templateName, err := requiredExecStringArg(args, "template")
+	if err != nil {
+		return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{Allowed: true, ResultDigest: "validation failed"})
+	}
 	template, ok := t.cfg.CommandTemplates[templateName]
 	if !ok {
 		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("template %q not allowed", templateName), mcp.AuditData{Allowed: true, ResultDigest: "template blocked"})
@@ -116,19 +124,29 @@ func (t templateTool) Call(ctx context.Context, _ mcp.CallContext, args map[stri
 	if err := validateTemplateWorkdir(t.cfg, template, resolvedWorkdir); err != nil {
 		return mcp.Result{}, err
 	}
-	confirm, _ := args["confirm"].(bool)
-	if template.RequiresConfirmation && !confirm && !t.cfg.UnsafeAllowAll {
-		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("template %q requires confirmation; set confirm=true to execute", templateName), mcp.AuditData{Workdir: resolvedWorkdir, Allowed: true, ResultDigest: "confirmation required"})
+	confirm, _, err := optionalBoolArg(args, "confirm")
+	if err != nil {
+		return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{Workdir: resolvedWorkdir, Allowed: true, ResultDigest: "validation failed"})
 	}
-	argv := cloneStrings(template.Command)
-	timeout := applyTimeoutOverride(template.Timeout, args["timeout_override_sec"])
+	if template.RequiresConfirmation && !confirm {
+		return mcp.Result{}, mcp.WrapToolErrorWithStructured(
+			fmt.Errorf("template %q requires confirmation; set confirm=true to execute", templateName),
+			mcp.AuditData{Workdir: resolvedWorkdir, Allowed: true, ResultDigest: "confirmation required"},
+			map[string]any{"confirmation_required": true},
+		)
+	}
+	argv := util.CloneStrings(template.Command)
+	timeout, err := applyTimeoutOverride(template.Timeout, args["timeout_override_sec"])
+	if err != nil {
+		return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{Workdir: resolvedWorkdir, Allowed: true, ResultDigest: "validation failed"})
+	}
 	extra := map[string]any{
 		"category":              template.Category,
 		"destructive":           template.Destructive,
 		"requires_confirmation": template.RequiresConfirmation,
 	}
 	if len(template.AllowedWorkdirs) > 0 {
-		extra["allowed_workdirs"] = cloneStrings(template.AllowedWorkdirs)
+		extra["allowed_workdirs"] = util.CloneStrings(template.AllowedWorkdirs)
 	}
 	if confirm {
 		extra["confirm"] = true
@@ -137,12 +155,26 @@ func (t templateTool) Call(ctx context.Context, _ mcp.CallContext, args map[stri
 }
 
 func (t configuredTool) Call(ctx context.Context, _ mcp.CallContext, args map[string]any) (mcp.Result, error) {
-	if t.cfg.UnsafeAllowAll {
-		if commandName, ok := args["command"].(string); ok && strings.TrimSpace(commandName) != "" {
-			return t.callRawCommand(ctx, args, commandName)
-		}
+	commandName, commandSet, err := optionalExecStringArg(args, "command")
+	if err != nil {
+		return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{Allowed: true, ResultDigest: "validation failed"})
 	}
-	presetName, _ := args["preset"].(string)
+	if commandSet {
+		if strings.TrimSpace(commandName) == "" {
+			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("command required"), mcp.AuditData{Allowed: true, ResultDigest: "validation failed"})
+		}
+		if !t.cfg.UnsafeAllowAll {
+			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("raw command not allowed"), mcp.AuditData{Allowed: false, ResultDigest: "raw command blocked"})
+		}
+		return t.callRawCommand(ctx, args, commandName)
+	}
+	presetName, presetSet, err := optionalExecStringArg(args, "preset")
+	if err != nil {
+		return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{Allowed: true, ResultDigest: "validation failed"})
+	}
+	if !presetSet || strings.TrimSpace(presetName) == "" {
+		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("preset required"), mcp.AuditData{Allowed: true, ResultDigest: "validation failed"})
+	}
 	preset, ok := t.cfg.ExecPresets[presetName]
 	if !ok {
 		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("preset %q not allowed", presetName), mcp.AuditData{Allowed: true, ResultDigest: "preset blocked"})
@@ -153,16 +185,20 @@ func (t configuredTool) Call(ctx context.Context, _ mcp.CallContext, args map[st
 		return mcp.Result{}, err
 	}
 
-	extraArgs, err := validateArgs(presetName, preset, args["args"])
+	validatedArgs, err := validateArgsForWorkdirDetailed(presetName, preset, args["args"], resolvedWorkdir)
 	if err != nil {
 		return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{Workdir: resolvedWorkdir, Allowed: true, ResultDigest: "validation failed"})
 	}
+	extraArgs := validatedArgs.args
 	argv := append(append([]string{}, preset.FixedArgs...), extraArgs...)
-	if len(extraArgs) == 0 {
+	if !validatedArgs.hasTarget {
 		argv = append(argv, defaultTargetsForPreset(presetName)...)
 	}
 
-	timeout := applyTimeoutOverride(preset.Timeout, args["timeout_override_sec"])
+	timeout, err := applyTimeoutOverride(preset.Timeout, args["timeout_override_sec"])
+	if err != nil {
+		return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{Workdir: resolvedWorkdir, Allowed: true, ResultDigest: "validation failed"})
+	}
 	fullArgv := append([]string{preset.Command}, argv...)
 	return runExecCommand(ctx, t.cfg, presetName, "preset", fullArgv, resolvedWorkdir, rawWorkdir, timeout, preset.Env, preset.ReadOnly, nil)
 }
@@ -180,7 +216,10 @@ func (t configuredTool) callRawCommand(ctx context.Context, args map[string]any,
 	if err != nil {
 		return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{Workdir: resolvedWorkdir, Allowed: true, ResultDigest: "validation failed"})
 	}
-	timeout := applyTimeoutOverride(t.cfg.CommandTimeout, args["timeout_override_sec"])
+	timeout, err := applyTimeoutOverride(t.cfg.CommandTimeout, args["timeout_override_sec"])
+	if err != nil {
+		return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{Workdir: resolvedWorkdir, Allowed: true, ResultDigest: "validation failed"})
+	}
 	argv := append([]string{commandName}, rawArgs...)
 	return runExecCommand(ctx, t.cfg, commandName, "raw", argv, resolvedWorkdir, rawWorkdir, timeout, env, false, map[string]any{
 		"mode":    "raw",
@@ -189,44 +228,107 @@ func (t configuredTool) callRawCommand(ctx context.Context, args map[string]any,
 }
 
 func resolveWorkdir(cfg config.Config, args map[string]any) (string, string, error) {
-	rawWorkdir, _ := args["workdir"].(string)
-	if strings.TrimSpace(rawWorkdir) == "" {
-		return "", "", mcp.WrapToolError(fmt.Errorf("workdir required"), mcp.AuditData{Allowed: true, ResultDigest: "validation failed"})
+	rawWorkdir, err := requiredExecStringArg(args, "workdir")
+	if err != nil {
+		return "", "", mcp.WrapToolError(err, mcp.AuditData{Allowed: true, ResultDigest: "validation failed"})
 	}
 	workdir := rawWorkdir
 	if !filepath.IsAbs(workdir) {
 		workdir = filepath.Join(cfg.StartupDirectory, workdir)
 	}
 	var resolvedWorkdir string
-	var err error
+	var resolveErr error
 	if cfg.UnsafeAllowAll {
-		resolvedWorkdir, err = security.RequireExistingWorkdir(workdir)
+		resolvedWorkdir, resolveErr = security.RequireExistingWorkdir(workdir)
 	} else {
-		resolvedWorkdir, err = security.RequireAllowedWorkdir(workdir, cfg.AllowedRoots)
+		resolvedWorkdir, resolveErr = security.RequireAllowedWorkdir(workdir, cfg.AllowedRoots)
 	}
-	if err != nil {
-		return "", rawWorkdir, mcp.WrapToolError(fmt.Errorf("workdir: %w", err), mcp.AuditData{TargetPath: rawWorkdir, Allowed: false, ResultDigest: "workdir rejected"})
+	if resolveErr != nil {
+		return "", rawWorkdir, mcp.WrapToolError(fmt.Errorf("workdir: %w", resolveErr), mcp.AuditData{TargetPath: rawWorkdir, Allowed: false, ResultDigest: "workdir rejected"})
 	}
 	return resolvedWorkdir, rawWorkdir, nil
 }
 
-func applyTimeoutOverride(timeout time.Duration, raw any) time.Duration {
-	if value, ok := raw.(float64); ok && value > 0 {
-		override := time.Duration(int(value)) * time.Second
-		if override < timeout {
-			return override
-		}
+func applyTimeoutOverride(timeout time.Duration, raw any) (time.Duration, error) {
+	if raw == nil {
+		return timeout, nil
 	}
-	if value, ok := raw.(int); ok && value > 0 {
-		override := time.Duration(value) * time.Second
-		if override < timeout {
-			return override
+	var seconds int
+	switch value := raw.(type) {
+	case int:
+		seconds = value
+	case float64:
+		parsed, err := util.ParseIntegerFloat(value, "timeout_override_sec")
+		if err != nil {
+			return 0, err
 		}
+		seconds = parsed
+	case json.Number:
+		parsed, err := numconv.IntFromJSONNumber(value, "timeout_override_sec")
+		if err != nil {
+			return 0, err
+		}
+		seconds = parsed
+	default:
+		return 0, fmt.Errorf("timeout_override_sec must be an integer")
 	}
-	return timeout
+	if seconds <= 0 {
+		return 0, fmt.Errorf("timeout_override_sec must be > 0")
+	}
+	if timeoutSeconds := timeout / time.Second; timeoutSeconds <= 0 || int64(seconds) > int64(timeoutSeconds) {
+		return timeout, nil
+	}
+	override := time.Duration(seconds) * time.Second
+	if override < timeout {
+		return override, nil
+	}
+	return timeout, nil
+}
+
+func optionalBoolArg(args map[string]any, key string) (bool, bool, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return false, false, nil
+	}
+	parsed, ok := value.(bool)
+	if !ok {
+		return false, true, fmt.Errorf("%s must be a boolean", key)
+	}
+	return parsed, true, nil
+}
+
+func optionalExecStringArg(args map[string]any, key string) (string, bool, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return "", false, nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", true, fmt.Errorf("%s must be a string", key)
+	}
+	return text, true, nil
+}
+
+func requiredExecStringArg(args map[string]any, key string) (string, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return "", fmt.Errorf("%s required", key)
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", key)
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", fmt.Errorf("%s required", key)
+	}
+	return text, nil
 }
 
 func runExecCommand(ctx context.Context, cfg config.Config, name string, mode string, argv []string, resolvedWorkdir string, rawWorkdir string, timeout time.Duration, fixedEnv map[string]string, readOnly bool, extraStructured map[string]any) (mcp.Result, error) {
+	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
+		auditData := mcp.AuditData{Workdir: resolvedWorkdir, Allowed: true, ResultDigest: fmt.Sprintf("exec %s %s validation failed", mode, name)}
+		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("exec %s %s command required", mode, name), auditData)
+	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if err := ensureManagedEnvDirs(fixedEnv); err != nil {
@@ -241,8 +343,8 @@ func runExecCommand(ctx context.Context, cfg config.Config, name string, mode st
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 	err := cmd.Run()
-	stdout := truncate(stdoutBuf.String(), cfg.OutputMaxBytes)
-	stderr := truncate(stderrBuf.String(), cfg.OutputMaxBytes)
+	stdout := util.Truncate(stdoutBuf.String(), cfg.OutputMaxBytes)
+	stderr := util.Truncate(stderrBuf.String(), cfg.OutputMaxBytes)
 	auditData := mcp.AuditData{Workdir: resolvedWorkdir, Allowed: true, Stdout: stdout, Stderr: stderr, ResultDigest: fmt.Sprintf("exec %s %s", mode, name)}
 	if len(fixedEnv) > 0 {
 		auditData.EnvKeys = sortedEnvKeys(fixedEnv)
@@ -286,9 +388,6 @@ func runExecCommand(ctx context.Context, cfg config.Config, name string, mode st
 }
 
 func validateTemplateWorkdir(cfg config.Config, template config.CommandTemplate, resolvedWorkdir string) error {
-	if cfg.UnsafeAllowAll {
-		return nil
-	}
 	if len(template.AllowedWorkdirs) == 0 {
 		return nil
 	}
@@ -297,7 +396,15 @@ func validateTemplateWorkdir(cfg config.Config, template config.CommandTemplate,
 		if !filepath.IsAbs(base) {
 			base = filepath.Join(cfg.StartupDirectory, base)
 		}
-		allowedDir, err := security.RequireAllowedWorkdir(base, cfg.AllowedRoots)
+		var (
+			allowedDir string
+			err        error
+		)
+		if cfg.UnsafeAllowAll {
+			allowedDir, err = security.RequireExistingWorkdir(base)
+		} else {
+			allowedDir, err = security.RequireAllowedWorkdir(base, cfg.AllowedRoots)
+		}
 		if err != nil {
 			continue
 		}
@@ -309,46 +416,70 @@ func validateTemplateWorkdir(cfg config.Config, template config.CommandTemplate,
 	return mcp.WrapToolError(fmt.Errorf("workdir not allowed for template"), mcp.AuditData{TargetPath: resolvedWorkdir, Allowed: false, ResultDigest: "workdir rejected"})
 }
 
+// rawStringArgs parses the args array for raw command mode. Unlike
+// stringSliceArg (used for preset args), it allows empty strings because
+// command arguments may legitimately be empty strings.
 func rawStringArgs(raw any) ([]string, error) {
-	values, ok := raw.([]any)
-	if !ok {
+	if raw == nil {
 		return nil, nil
 	}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		text, ok := value.(string)
-		if !ok || strings.TrimSpace(text) == "" {
-			return nil, fmt.Errorf("args must be non-empty strings")
+	switch values := raw.(type) {
+	case []string:
+		out := make([]string, len(values))
+		copy(out, values)
+		return out, nil
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			text, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("args must be strings")
+			}
+			out = append(out, text)
 		}
-		out = append(out, text)
+		return out, nil
+	default:
+		return nil, fmt.Errorf("args must be an array")
 	}
-	return out, nil
 }
 
 func rawEnv(raw any) (map[string]string, error) {
-	values, ok := raw.(map[string]any)
-	if !ok {
+	if raw == nil {
 		return nil, nil
 	}
-	out := make(map[string]string, len(values))
-	for key, value := range values {
-		if strings.TrimSpace(key) == "" {
-			return nil, fmt.Errorf("env keys must be non-empty strings")
+	switch values := raw.(type) {
+	case map[string]string:
+		out := make(map[string]string, len(values))
+		for key, value := range values {
+			if err := util.ValidateEnvKey(key); err != nil {
+				return nil, err
+			}
+			out[key] = value
 		}
-		text, ok := value.(string)
-		if !ok {
-			return nil, fmt.Errorf("env values must be strings")
+		return out, nil
+	case map[string]any:
+		out := make(map[string]string, len(values))
+		for key, value := range values {
+			if err := util.ValidateEnvKey(key); err != nil {
+				return nil, err
+			}
+			text, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("env values must be strings")
+			}
+			out[key] = text
 		}
-		out[key] = text
+		return out, nil
+	default:
+		return nil, fmt.Errorf("env must be an object")
 	}
-	return out, nil
 }
 
 func mergeCommandEnv(base []string, fixed map[string]string) []string {
 	if len(fixed) == 0 {
 		return base
 	}
-	merged := cloneStrings(base)
+	merged := util.CloneStrings(base)
 	for key, value := range fixed {
 		merged = append(merged, key+"="+value)
 	}
@@ -378,7 +509,7 @@ func templateSummaryForSchema(values map[string]config.CommandTemplate) string {
 	parts := make([]string, 0, len(names))
 	for _, name := range names {
 		tpl := values[name]
-		parts = append(parts, fmt.Sprintf("%s(category=%s,destructive=%t,requires_confirmation=%t,read_only=%t)", name, firstNonEmpty(tpl.Category, "uncategorized"), tpl.Destructive, tpl.RequiresConfirmation, tpl.ReadOnly))
+		parts = append(parts, fmt.Sprintf("%s(category=%s,destructive=%t,requires_confirmation=%t,read_only=%t)", name, util.FirstNonEmpty(tpl.Category, "uncategorized"), tpl.Destructive, tpl.RequiresConfirmation, tpl.ReadOnly))
 	}
 	return strings.Join(parts, "; ")
 }
@@ -396,69 +527,154 @@ func summarizeTemplateMetadata(values map[string]config.CommandTemplate) map[str
 			entry["env_keys"] = sortedEnvKeys(tpl.Env)
 		}
 		if len(tpl.AllowedWorkdirs) > 0 {
-			entry["allowed_workdirs"] = cloneStrings(tpl.AllowedWorkdirs)
+			entry["allowed_workdirs"] = util.CloneStrings(tpl.AllowedWorkdirs)
 		}
 		out[name] = entry
 	}
 	return out
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
+func validateArgs(presetName string, preset config.ExecPreset, raw any) ([]string, error) {
+	return validateArgsForWorkdir(presetName, preset, raw, "")
 }
 
-func validateArgs(presetName string, preset config.ExecPreset, raw any) ([]string, error) {
-	values, ok := raw.([]any)
-	if !ok {
-		return nil, nil
+func validateArgsForWorkdir(presetName string, preset config.ExecPreset, raw any, resolvedWorkdir string) ([]string, error) {
+	validated, err := validateArgsForWorkdirDetailed(presetName, preset, raw, resolvedWorkdir)
+	if err != nil {
+		return nil, err
+	}
+	return validated.args, nil
+}
+
+type validatedPresetArgs struct {
+	args      []string
+	hasTarget bool
+}
+
+func validateArgsForWorkdirDetailed(presetName string, preset config.ExecPreset, raw any, resolvedWorkdir string) (validatedPresetArgs, error) {
+	values, err := stringSliceArg(raw, "args")
+	if err != nil {
+		return validatedPresetArgs{}, err
 	}
 	out := make([]string, 0, len(values))
-	for _, value := range values {
-		arg, ok := value.(string)
-		if !ok || strings.TrimSpace(arg) == "" {
-			return nil, fmt.Errorf("args must be non-empty strings")
-		}
+	hasTarget := false
+	for i := 0; i < len(values); i++ {
+		arg := values[i]
 		if strings.HasPrefix(arg, "-") {
 			name, inlineValue, hasInlineValue := splitFlagValue(arg)
 			if blockedFlags[name] {
-				return nil, fmt.Errorf("arg %q not allowed for preset %s", name, presetName)
+				return validatedPresetArgs{}, fmt.Errorf("arg %q not allowed for preset %s", name, presetName)
 			}
 			if !isAllowedFlagName(name, preset.AllowedArgs) {
-				return nil, fmt.Errorf("arg %q not allowed for preset %s", arg, presetName)
+				return validatedPresetArgs{}, fmt.Errorf("arg %q not allowed for preset %s", arg, presetName)
 			}
 			if hasInlineValue {
 				if !inlineValueAllowedFlags[name] {
-					return nil, fmt.Errorf("arg %q does not allow inline values", name)
+					return validatedPresetArgs{}, fmt.Errorf("arg %q does not allow inline values", name)
 				}
 				if strings.TrimSpace(inlineValue) == "" {
-					return nil, fmt.Errorf("arg %q requires a non-empty value", name)
+					return validatedPresetArgs{}, fmt.Errorf("arg %q requires a non-empty value", name)
 				}
 				if inlinePathFlags[name] {
-					if !isLocalTarget(inlineValue) {
-						return nil, fmt.Errorf("arg %q must stay within the working directory", arg)
+					normalized, err := normalizeInlinePathValue(inlineValue, resolvedWorkdir)
+					if err != nil {
+						return validatedPresetArgs{}, fmt.Errorf("arg %q must stay within the working directory", arg)
 					}
-					inlineValue = filepath.ToSlash(filepath.Clean(inlineValue))
+					inlineValue = normalized
 				}
 				out = append(out, name+"="+inlineValue)
+				continue
+			}
+			if inlineValueAllowedFlags[name] {
+				if i+1 >= len(values) {
+					return validatedPresetArgs{}, fmt.Errorf("arg %q requires a non-empty value", name)
+				}
+				separateValue := values[i+1]
+				if strings.TrimSpace(separateValue) == "" {
+					return validatedPresetArgs{}, fmt.Errorf("arg %q requires a non-empty value", name)
+				}
+				if inlinePathFlags[name] {
+					normalized, err := normalizeInlinePathValue(separateValue, resolvedWorkdir)
+					if err != nil {
+						return validatedPresetArgs{}, fmt.Errorf("arg %q must stay within the working directory", arg)
+					}
+					separateValue = normalized
+				}
+				out = append(out, name, separateValue)
+				i++
 				continue
 			}
 			out = append(out, name)
 			continue
 		}
 		if !isAllowedPositionalArg(presetName, arg) {
-			return nil, fmt.Errorf("arg %q must stay within the working directory", arg)
+			return validatedPresetArgs{}, fmt.Errorf("arg %q must stay within the working directory", arg)
 		}
 		if !presetAllowsPositionalArg(presetName) {
-			return nil, fmt.Errorf("preset %s does not accept positional args", presetName)
+			return validatedPresetArgs{}, fmt.Errorf("preset %s does not accept positional args", presetName)
 		}
+		if err := validatePositionalTargetWithinWorkdir(presetName, arg, resolvedWorkdir); err != nil {
+			return validatedPresetArgs{}, fmt.Errorf("arg %q must stay within the working directory", arg)
+		}
+		hasTarget = true
 		out = append(out, normalizePositionalArg(presetName, arg))
 	}
-	return out, nil
+	return validatedPresetArgs{args: out, hasTarget: hasTarget}, nil
+}
+
+func validatePositionalTargetWithinWorkdir(presetName string, arg string, resolvedWorkdir string) error {
+	if strings.TrimSpace(resolvedWorkdir) == "" || !isLocalTarget(arg) {
+		return nil
+	}
+	if presetName == "go_get" && isModuleSpec(arg) {
+		return nil
+	}
+	candidate := filepath.Join(resolvedWorkdir, filepath.Clean(arg))
+	_, err := security.ResolvePath(candidate, []string{resolvedWorkdir})
+	return err
+}
+
+func normalizeInlinePathValue(value string, resolvedWorkdir string) (string, error) {
+	if !isLocalTarget(value) {
+		return "", fmt.Errorf("path must be local")
+	}
+	clean := filepath.Clean(value)
+	if strings.TrimSpace(resolvedWorkdir) != "" {
+		candidate := filepath.Join(resolvedWorkdir, clean)
+		if _, err := security.ResolvePath(candidate, []string{resolvedWorkdir}); err != nil {
+			return "", err
+		}
+	}
+	return filepath.ToSlash(clean), nil
+}
+
+func stringSliceArg(raw any, name string) ([]string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	switch values := raw.(type) {
+	case []string:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" {
+				return nil, fmt.Errorf("%s must be non-empty strings", name)
+			}
+			out = append(out, value)
+		}
+		return out, nil
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			text, ok := value.(string)
+			if !ok || strings.TrimSpace(text) == "" {
+				return nil, fmt.Errorf("%s must be non-empty strings", name)
+			}
+			out = append(out, text)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("%s must be an array", name)
+	}
 }
 
 func defaultTargetsForPreset(preset string) []string {
@@ -499,15 +715,10 @@ func isLocalTarget(arg string) bool {
 }
 
 func isAllowedPositionalArg(presetName string, arg string) bool {
-	if isLocalTarget(arg) {
-		return true
+	if isModuleSpec(arg) {
+		return presetName == "go_get"
 	}
-	switch presetName {
-	case "go_get":
-		return isModuleSpec(arg)
-	default:
-		return false
-	}
+	return isLocalTarget(arg)
 }
 
 func presetAllowsPositionalArg(presetName string) bool {
@@ -520,17 +731,39 @@ func presetAllowsPositionalArg(presetName string) bool {
 }
 
 func normalizePositionalArg(presetName string, arg string) string {
+	if presetName == "go_get" && isModuleSpec(arg) {
+		return arg
+	}
 	if isLocalTarget(arg) {
-		return filepath.ToSlash(filepath.Clean(arg))
+		return normalizeLocalTarget(arg)
 	}
 	return arg
 }
 
+func normalizeLocalTarget(arg string) string {
+	clean := filepath.ToSlash(filepath.Clean(arg))
+	raw := filepath.ToSlash(arg)
+	if clean == "." {
+		return clean
+	}
+	if strings.HasPrefix(raw, "./") && !strings.HasPrefix(clean, "./") {
+		return "./" + clean
+	}
+	if !strings.HasPrefix(clean, "./") {
+		return "./" + clean
+	}
+	return clean
+}
+
 func isModuleSpec(arg string) bool {
-	if strings.TrimSpace(arg) == "" || strings.Contains(arg, "://") || strings.HasPrefix(arg, "-") || filepath.IsAbs(arg) {
+	arg = strings.TrimSpace(arg)
+	if arg == "" || strings.Contains(arg, "://") || strings.HasPrefix(arg, "-") || filepath.IsAbs(arg) {
 		return false
 	}
 	if strings.ContainsAny(arg, " \t\r\n") {
+		return false
+	}
+	if arg == "." || arg == ".." || strings.HasPrefix(arg, "./") || strings.HasPrefix(arg, "../") {
 		return false
 	}
 	modulePath := arg
@@ -540,8 +773,8 @@ func isModuleSpec(arg string) bool {
 	if modulePath == "" {
 		return false
 	}
-	first, _, _ := strings.Cut(modulePath, "/")
-	return strings.Contains(first, ".")
+	first, _, hasSlash := strings.Cut(modulePath, "/")
+	return strings.Contains(first, ".") && (hasSlash || strings.Contains(arg, "@"))
 }
 
 func ensureManagedEnvDirs(fixedEnv map[string]string) error {
@@ -555,20 +788,4 @@ func ensureManagedEnvDirs(fixedEnv map[string]string) error {
 		}
 	}
 	return nil
-}
-
-func truncate(text string, limit int) string {
-	if len(text) <= limit {
-		return text
-	}
-	return text[:limit] + "\n[truncated]"
-}
-
-func cloneStrings(values []string) []string {
-	if values == nil {
-		return nil
-	}
-	out := make([]string, len(values))
-	copy(out, values)
-	return out
 }

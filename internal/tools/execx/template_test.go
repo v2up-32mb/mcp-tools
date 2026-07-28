@@ -42,6 +42,62 @@ func TestRunTemplateRejectsUnknownTemplate(t *testing.T) {
 	}
 }
 
+func TestRunTemplateRejectsNonStringTemplate(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "marker.txt")
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   time.Second,
+		CommandTemplates: map[string]config.CommandTemplate{
+			"mark": {Command: []string{"sh", "-c", "printf ran > marker.txt"}, Timeout: time.Second},
+		},
+	}
+	tool := findTool(t, cfg, "exec.run_template")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"template": []any{"mark"},
+		"workdir":  ".",
+	})
+	if err == nil {
+		t.Fatal("expected non-string template to be rejected")
+	}
+	if !strings.Contains(err.Error(), "template must be a string") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Fatalf("template should not execute on validation error, stat err=%v", statErr)
+	}
+}
+
+func TestRunTemplateRejectsNonStringWorkdir(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "marker.txt")
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   time.Second,
+		CommandTemplates: map[string]config.CommandTemplate{
+			"mark": {Command: []string{"sh", "-c", "printf ran > marker.txt"}, Timeout: time.Second},
+		},
+	}
+	tool := findTool(t, cfg, "exec.run_template")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"template": "mark",
+		"workdir":  []any{"."},
+	})
+	if err == nil {
+		t.Fatal("expected non-string workdir to be rejected")
+	}
+	if !strings.Contains(err.Error(), "workdir must be a string") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Fatalf("template should not execute on validation error, stat err=%v", statErr)
+	}
+}
+
 func TestRunTemplateExecutesConfiguredCommand(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "go.mod")
@@ -199,5 +255,129 @@ func TestRunTemplateRequiresConfirmation(t *testing.T) {
 	}
 	if res.StructuredContent["confirm"] != true {
 		t.Fatalf("expected confirm flag in result, got %#v", res.StructuredContent)
+	}
+}
+
+func TestRunTemplateRejectsNonBooleanConfirm(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "marker.txt")
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		CommandTemplates: map[string]config.CommandTemplate{
+			"mark": {Command: []string{"sh", "-c", "printf ran > marker.txt"}, Category: "test", Timeout: 5 * time.Second},
+		},
+	}
+	tool := findTool(t, cfg, "exec.run_template")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"template": "mark",
+		"workdir":  ".",
+		"confirm":  "true",
+	})
+	if err == nil {
+		t.Fatal("expected non-boolean confirm error")
+	}
+	if !strings.Contains(err.Error(), "confirm must be a boolean") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("template should not execute on validation error, stat err=%v", err)
+	}
+}
+
+func TestRunTemplateRequiresConfirmationWhenUnsafeAllowAllEnabled(t *testing.T) {
+	workdir := t.TempDir()
+	cfg := config.Config{
+		StartupDirectory: workdir,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		UnsafeAllowAll:   true,
+		CommandTemplates: map[string]config.CommandTemplate{
+			"cleanup": {Command: []string{"pwd"}, Category: "cleanup", Destructive: true, RequiresConfirmation: true, Timeout: 5 * time.Second},
+		},
+	}
+	tool := findTool(t, cfg, "exec.run_template")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"template": "cleanup",
+		"workdir":  workdir,
+	})
+	if err == nil {
+		t.Fatal("expected confirmation required error when unsafe_allow_all is enabled")
+	}
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"template": "cleanup",
+		"workdir":  workdir,
+		"confirm":  true,
+	})
+	if err != nil {
+		t.Fatalf("expected confirmed execution to pass, got %v", err)
+	}
+	if res.StructuredContent["confirm"] != true {
+		t.Fatalf("expected confirm flag in result, got %#v", res.StructuredContent)
+	}
+}
+
+func TestRunTemplateAllowedWorkdirsStillApplyWhenUnsafeAllowAllEnabled(t *testing.T) {
+	root := t.TempDir()
+	allowed := filepath.Join(root, "allowed")
+	denied := filepath.Join(root, "denied")
+	for _, dir := range []string{allowed, denied} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		UnsafeAllowAll:   true,
+		CommandTemplates: map[string]config.CommandTemplate{
+			"pwd": {Command: []string{"pwd"}, AllowedWorkdirs: []string{"allowed"}, Timeout: 5 * time.Second},
+		},
+	}
+	tool := findTool(t, cfg, "exec.run_template")
+
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"template": "pwd",
+		"workdir":  denied,
+	})
+	if err == nil {
+		t.Fatal("expected allowed_workdirs to reject denied workdir even with unsafe_allow_all enabled")
+	}
+
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"template": "pwd",
+		"workdir":  allowed,
+	})
+	if err != nil {
+		t.Fatalf("expected allowed workdir to pass, got %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %#v", res)
+	}
+}
+
+func TestRunTemplateRejectsEmptyCommand(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		CommandTemplates: map[string]config.CommandTemplate{
+			"empty": {Timeout: 5 * time.Second},
+		},
+	}
+	tool := findTool(t, cfg, "exec.run_template")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"template": "empty",
+		"workdir":  ".",
+	})
+	if err == nil {
+		t.Fatal("expected empty template command to be rejected")
 	}
 }

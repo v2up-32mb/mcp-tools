@@ -128,6 +128,75 @@ func TestJSONLWriterUsesExistingFileSizeOnStartup(t *testing.T) {
 	}
 }
 
+func TestJSONLWriterCloseIsIdempotentAndWriteAfterCloseFails(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "mcp-audit.jsonl")
+
+	writer, err := NewJSONLWriter(path)
+	if err != nil {
+		t.Fatalf("NewJSONLWriter error: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("first close error: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("second close should be idempotent, got %v", err)
+	}
+	err = writer.Write(Event{Timestamp: time.Unix(1, 0).UTC(), Tool: "tool", Allowed: true, Success: true})
+	if err == nil {
+		t.Fatal("expected write after close to fail")
+	}
+}
+
+func TestJSONLWriterCanRetryAfterRotationFailure(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "mcp-audit.jsonl")
+
+	first := Event{Timestamp: time.Unix(1, 0).UTC(), Tool: "first", Allowed: true, Success: true, ResultDigest: "first"}
+	writer, err := NewJSONLWriterWithOptions(path, RotateOptions{
+		MaxSizeBytes: int64(len(mustJSONL(t, first)) + 10),
+		MaxBackups:   1,
+	})
+	if err != nil {
+		t.Fatalf("NewJSONLWriterWithOptions error: %v", err)
+	}
+	defer writer.Close()
+
+	if err := writer.Write(first); err != nil {
+		t.Fatalf("first write error: %v", err)
+	}
+	blocker := path + ".1"
+	if err := os.Mkdir(blocker, 0o755); err != nil {
+		t.Fatalf("make blocker dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(blocker, "keep"), []byte("block\n"), 0o600); err != nil {
+		t.Fatalf("write blocker file: %v", err)
+	}
+
+	second := Event{Timestamp: time.Unix(2, 0).UTC(), Tool: "second", Allowed: true, Success: true, ResultDigest: "second"}
+	if err := writer.Write(second); err == nil {
+		t.Fatal("expected rotation to fail while oldest backup is a non-empty directory")
+	}
+	if err := os.Remove(filepath.Join(blocker, "keep")); err != nil {
+		t.Fatalf("remove blocker file: %v", err)
+	}
+	if err := os.Remove(blocker); err != nil {
+		t.Fatalf("remove blocker dir: %v", err)
+	}
+	if err := writer.Write(second); err != nil {
+		t.Fatalf("retry write after clearing rotation blocker: %v", err)
+	}
+
+	current := readFile(t, path)
+	if string(current) != string(mustJSONL(t, second)) {
+		t.Fatalf("unexpected current audit log contents after retry: %s", current)
+	}
+	rotated := readFile(t, path+".1")
+	if string(rotated) != string(mustJSONL(t, first)) {
+		t.Fatalf("unexpected rotated audit log contents after retry: %s", rotated)
+	}
+}
+
 func mustJSONL(t *testing.T, ev Event) []byte {
 	t.Helper()
 	payload, err := json.Marshal(ev)

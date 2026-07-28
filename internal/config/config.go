@@ -1,8 +1,11 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"github.com/example/mcp-tools/internal/util"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -106,13 +109,13 @@ type fileConfig struct {
 	SessionTTLMin         *int           `yaml:"session_ttl_min"`
 	ServerName            string         `yaml:"server_name"`
 	ServerVersion         string         `yaml:"server_version"`
-	SupportedProtocols    []string       `yaml:"supported_protocols"`
+	SupportedProtocols    *[]string      `yaml:"supported_protocols"`
 	Git                   fileGitConfig  `yaml:"git"`
 	Exec                  fileExecConfig `yaml:"exec"`
 }
 
 type fileGitConfig struct {
-	AllowedSubcommands []string `yaml:"allowed_subcommands"`
+	AllowedSubcommands *[]string `yaml:"allowed_subcommands"`
 }
 
 type fileExecConfig struct {
@@ -122,7 +125,7 @@ type fileExecConfig struct {
 
 type fileExecPreset struct {
 	Enabled     *bool             `yaml:"enabled"`
-	Command     string            `yaml:"command"`
+	Command     *string           `yaml:"command"`
 	FixedArgs   []string          `yaml:"fixed_args"`
 	AllowedArgs []string          `yaml:"allowed_args"`
 	Env         map[string]string `yaml:"env"`
@@ -162,7 +165,7 @@ func LoadWithOptions(opts LoadOptions) (Config, error) {
 	cwd = filepath.Clean(cwd)
 
 	cfg := defaultConfig(cwd)
-	configPath := strings.TrimSpace(firstNonEmpty(opts.ConfigPath, os.Getenv("MCP_CONFIG_FILE")))
+	configPath := strings.TrimSpace(util.FirstNonEmpty(opts.ConfigPath, os.Getenv("MCP_CONFIG_FILE")))
 	if configPath != "" {
 		resolvedConfigPath, err := resolveConfigPathAgainst(cwd, configPath)
 		if err != nil {
@@ -224,9 +227,24 @@ func applyYAMLFile(cfg *Config, path string) error {
 	if err != nil {
 		return fmt.Errorf("read config file %q: %w", path, err)
 	}
+	if err := validateYAMLDocumentShape(payload, path); err != nil {
+		return err
+	}
 	var fc fileConfig
-	if err := yaml.Unmarshal(payload, &fc); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(payload))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&fc); err != nil {
+		if err == io.EOF {
+			return nil
+		}
 		return fmt.Errorf("parse config file %q: %w", path, err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err != nil {
+			return fmt.Errorf("parse config file %q: %w", path, err)
+		}
+		return fmt.Errorf("parse config file %q: multiple YAML documents are not supported", path)
 	}
 	baseDir := filepath.Dir(path)
 	if fc.ListenAddr != "" {
@@ -244,12 +262,16 @@ func applyYAMLFile(cfg *Config, path string) error {
 	if len(fc.AllowedRoots) > 0 {
 		roots, err := resolvePathList(fc.AllowedRoots, baseDir)
 		if err != nil {
-			return err
+			return fmt.Errorf("allowed_roots: %w", err)
 		}
 		cfg.AllowedRoots = mergeUniquePaths(cfg.AllowedRoots, roots)
 	}
 	if len(fc.AllowedOrigins) > 0 {
-		cfg.AllowedOrigins = dedupeStrings(fc.AllowedOrigins)
+		origins, err := dedupeRequiredStrings(fc.AllowedOrigins, "allowed_origins")
+		if err != nil {
+			return err
+		}
+		cfg.AllowedOrigins = origins
 	}
 	if fc.AuditLogPath != "" {
 		cfg.AuditLogPath = resolveMaybeRelative(baseDir, fc.AuditLogPath)
@@ -261,7 +283,11 @@ func applyYAMLFile(cfg *Config, path string) error {
 		cfg.AuditRotateMaxBackups = *fc.AuditRotateMaxBackups
 	}
 	if fc.CommandTimeoutSec != nil {
-		cfg.CommandTimeout = time.Duration(*fc.CommandTimeoutSec) * time.Second
+		timeout, err := durationFromUnits(*fc.CommandTimeoutSec, time.Second, "command_timeout_sec")
+		if err != nil {
+			return err
+		}
+		setCommandTimeout(cfg, timeout)
 	}
 	if fc.OutputMaxBytes != nil {
 		cfg.OutputMaxBytes = *fc.OutputMaxBytes
@@ -273,19 +299,39 @@ func applyYAMLFile(cfg *Config, path string) error {
 		cfg.MaxRequestBytes = *fc.MaxRequestBytes
 	}
 	if fc.ReadHeaderTimeoutSec != nil {
-		cfg.ReadHeaderTimeout = time.Duration(*fc.ReadHeaderTimeoutSec) * time.Second
+		timeout, err := durationFromUnits(*fc.ReadHeaderTimeoutSec, time.Second, "read_header_timeout_sec")
+		if err != nil {
+			return err
+		}
+		cfg.ReadHeaderTimeout = timeout
 	}
 	if fc.ReadTimeoutSec != nil {
-		cfg.ReadTimeout = time.Duration(*fc.ReadTimeoutSec) * time.Second
+		timeout, err := durationFromUnits(*fc.ReadTimeoutSec, time.Second, "read_timeout_sec")
+		if err != nil {
+			return err
+		}
+		cfg.ReadTimeout = timeout
 	}
 	if fc.WriteTimeoutSec != nil {
-		cfg.WriteTimeout = time.Duration(*fc.WriteTimeoutSec) * time.Second
+		timeout, err := durationFromUnits(*fc.WriteTimeoutSec, time.Second, "write_timeout_sec")
+		if err != nil {
+			return err
+		}
+		cfg.WriteTimeout = timeout
 	}
 	if fc.IdleTimeoutSec != nil {
-		cfg.IdleTimeout = time.Duration(*fc.IdleTimeoutSec) * time.Second
+		timeout, err := durationFromUnits(*fc.IdleTimeoutSec, time.Second, "idle_timeout_sec")
+		if err != nil {
+			return err
+		}
+		cfg.IdleTimeout = timeout
 	}
 	if fc.SessionTTLMin != nil {
-		cfg.SessionTTL = time.Duration(*fc.SessionTTLMin) * time.Minute
+		ttl, err := durationFromUnits(*fc.SessionTTLMin, time.Minute, "session_ttl_min")
+		if err != nil {
+			return err
+		}
+		cfg.SessionTTL = ttl
 	}
 	if fc.ServerName != "" {
 		cfg.ServerName = fc.ServerName
@@ -293,14 +339,15 @@ func applyYAMLFile(cfg *Config, path string) error {
 	if fc.ServerVersion != "" {
 		cfg.ServerVersion = fc.ServerVersion
 	}
-	if len(fc.SupportedProtocols) > 0 {
-		cfg.SupportedProtocols = dedupeStrings(fc.SupportedProtocols)
+	if fc.SupportedProtocols != nil {
+		cfg.SupportedProtocols = util.CloneStrings(*fc.SupportedProtocols)
 	}
-	if len(fc.Git.AllowedSubcommands) > 0 {
-		cfg.GitAllowed = make(map[string]bool, len(fc.Git.AllowedSubcommands))
-		for _, subcommand := range dedupeStrings(fc.Git.AllowedSubcommands) {
-			cfg.GitAllowed[subcommand] = true
+	if fc.Git.AllowedSubcommands != nil {
+		allowed, err := resolveGitAllowedSubcommands(*fc.Git.AllowedSubcommands)
+		if err != nil {
+			return fmt.Errorf("git.allowed_subcommands: %w", err)
 		}
+		cfg.GitAllowed = allowed
 	}
 	if len(fc.Exec.Presets) > 0 {
 		merged, err := mergeExecPresets(cfg.ExecPresets, fc.Exec.Presets, baseDir, cfg.CommandTimeout)
@@ -310,13 +357,92 @@ func applyYAMLFile(cfg *Config, path string) error {
 		cfg.ExecPresets = merged
 	}
 	if len(fc.Exec.CommandTemplates) > 0 {
-		merged, err := mergeCommandTemplates(cfg.CommandTemplates, fc.Exec.CommandTemplates, cfg.CommandTimeout)
+		merged, err := mergeCommandTemplates(cfg.CommandTemplates, fc.Exec.CommandTemplates, baseDir, cfg.CommandTimeout)
 		if err != nil {
 			return err
 		}
 		cfg.CommandTemplates = merged
 	}
 	return nil
+}
+
+func validateYAMLDocumentShape(payload []byte, path string) error {
+	var doc yaml.Node
+	decoder := yaml.NewDecoder(bytes.NewReader(payload))
+	if err := decoder.Decode(&doc); err != nil {
+		if err == io.EOF {
+			return nil
+		}
+		return fmt.Errorf("parse config file %q: %w", path, err)
+	}
+	var extra yaml.Node
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err != nil {
+			return fmt.Errorf("parse config file %q: %w", path, err)
+		}
+		return fmt.Errorf("parse config file %q: multiple YAML documents are not supported", path)
+	}
+	if isExplicitNullDocument(doc) {
+		return fmt.Errorf("parse config file %q: YAML document must be a mapping, not null", path)
+	}
+	if nullPath, ok := findNullYAMLValuePath(&doc, ""); ok {
+		return fmt.Errorf("parse config file %q: YAML field %s must not be null", path, nullPath)
+	}
+	return nil
+}
+
+func isExplicitNullDocument(doc yaml.Node) bool {
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 {
+		return false
+	}
+	child := doc.Content[0]
+	return child.Kind == yaml.ScalarNode && child.Tag == "!!null" && strings.TrimSpace(child.Value) != ""
+}
+
+func findNullYAMLValuePath(node *yaml.Node, nodePath string) (string, bool) {
+	if node == nil {
+		return "", false
+	}
+	switch node.Kind {
+	case yaml.DocumentNode:
+		if len(node.Content) == 0 {
+			return "", false
+		}
+		return findNullYAMLValuePath(node.Content[0], nodePath)
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			childPath := appendYAMLFieldPath(nodePath, node.Content[i], i/2)
+			if foundPath, ok := findNullYAMLValuePath(node.Content[i+1], childPath); ok {
+				return foundPath, true
+			}
+		}
+	case yaml.SequenceNode:
+		for i, child := range node.Content {
+			childPath := fmt.Sprintf("[%d]", i)
+			if nodePath != "" {
+				childPath = fmt.Sprintf("%s[%d]", nodePath, i)
+			}
+			if foundPath, ok := findNullYAMLValuePath(child, childPath); ok {
+				return foundPath, true
+			}
+		}
+	case yaml.ScalarNode:
+		if node.Tag == "!!null" {
+			return nodePath, true
+		}
+	}
+	return "", false
+}
+
+func appendYAMLFieldPath(parent string, key *yaml.Node, index int) string {
+	name := fmt.Sprintf("<field:%d>", index)
+	if key != nil && strings.TrimSpace(key.Value) != "" {
+		name = key.Value
+	}
+	if parent == "" {
+		return name
+	}
+	return parent + "." + name
 }
 
 func applyEnv(cfg *Config, cwd string) error {
@@ -337,14 +463,18 @@ func applyEnv(cfg *Config, cwd string) error {
 		cfg.UnsafeAllowAll = parsed
 	}
 	if value := os.Getenv("MCP_ALLOWED_ROOTS"); value != "" {
-		roots, err := resolvePathList(splitCSV(value), cwd)
+		roots, err := resolvePathList(splitCSVStrict(value), cwd)
 		if err != nil {
-			return err
+			return fmt.Errorf("MCP_ALLOWED_ROOTS: %w", err)
 		}
 		cfg.AllowedRoots = mergeUniquePaths(defaultAllowedRoots(cfg.StartupDirectory), roots)
 	}
 	if value := os.Getenv("MCP_ALLOWED_ORIGINS"); value != "" {
-		cfg.AllowedOrigins = dedupeStrings(splitCSV(value))
+		origins, err := dedupeRequiredStrings(splitCSVStrict(value), "MCP_ALLOWED_ORIGINS")
+		if err != nil {
+			return err
+		}
+		cfg.AllowedOrigins = origins
 	}
 	if value := os.Getenv("MCP_AUDIT_LOG_PATH"); value != "" {
 		cfg.AuditLogPath = resolveMaybeRelative(cwd, value)
@@ -389,14 +519,22 @@ func applyEnv(cfg *Config, cwd string) error {
 		if err != nil {
 			return err
 		}
-		cfg.CommandTimeout = time.Duration(parsed) * time.Second
+		timeout, err := durationFromUnits(parsed, time.Second, "MCP_COMMAND_TIMEOUT_SEC")
+		if err != nil {
+			return err
+		}
+		setCommandTimeout(cfg, timeout)
 	}
 	if value := os.Getenv("MCP_SESSION_TTL_MIN"); value != "" {
 		parsed, err := parsePositiveInt(value, "MCP_SESSION_TTL_MIN")
 		if err != nil {
 			return err
 		}
-		cfg.SessionTTL = time.Duration(parsed) * time.Minute
+		ttl, err := durationFromUnits(parsed, time.Minute, "MCP_SESSION_TTL_MIN")
+		if err != nil {
+			return err
+		}
+		cfg.SessionTTL = ttl
 	}
 	if value := os.Getenv("MCP_SERVER_NAME"); value != "" {
 		cfg.ServerName = value
@@ -409,28 +547,44 @@ func applyEnv(cfg *Config, cwd string) error {
 		if err != nil {
 			return err
 		}
-		cfg.ReadHeaderTimeout = time.Duration(parsed) * time.Second
+		timeout, err := durationFromUnits(parsed, time.Second, "MCP_READ_HEADER_TIMEOUT_SEC")
+		if err != nil {
+			return err
+		}
+		cfg.ReadHeaderTimeout = timeout
 	}
 	if value := os.Getenv("MCP_READ_TIMEOUT_SEC"); value != "" {
 		parsed, err := parsePositiveInt(value, "MCP_READ_TIMEOUT_SEC")
 		if err != nil {
 			return err
 		}
-		cfg.ReadTimeout = time.Duration(parsed) * time.Second
+		timeout, err := durationFromUnits(parsed, time.Second, "MCP_READ_TIMEOUT_SEC")
+		if err != nil {
+			return err
+		}
+		cfg.ReadTimeout = timeout
 	}
 	if value := os.Getenv("MCP_WRITE_TIMEOUT_SEC"); value != "" {
 		parsed, err := parsePositiveInt(value, "MCP_WRITE_TIMEOUT_SEC")
 		if err != nil {
 			return err
 		}
-		cfg.WriteTimeout = time.Duration(parsed) * time.Second
+		timeout, err := durationFromUnits(parsed, time.Second, "MCP_WRITE_TIMEOUT_SEC")
+		if err != nil {
+			return err
+		}
+		cfg.WriteTimeout = timeout
 	}
 	if value := os.Getenv("MCP_IDLE_TIMEOUT_SEC"); value != "" {
 		parsed, err := parsePositiveInt(value, "MCP_IDLE_TIMEOUT_SEC")
 		if err != nil {
 			return err
 		}
-		cfg.IdleTimeout = time.Duration(parsed) * time.Second
+		timeout, err := durationFromUnits(parsed, time.Second, "MCP_IDLE_TIMEOUT_SEC")
+		if err != nil {
+			return err
+		}
+		cfg.IdleTimeout = timeout
 	}
 	return nil
 }
@@ -562,6 +716,26 @@ func defaultCommandTemplates(baseTimeout time.Duration) map[string]CommandTempla
 	}
 }
 
+func setCommandTimeout(cfg *Config, timeout time.Duration) {
+	previous := cfg.CommandTimeout
+	cfg.CommandTimeout = timeout
+	if previous <= 0 || previous == timeout {
+		return
+	}
+	for name, preset := range cfg.ExecPresets {
+		if preset.Timeout == previous {
+			preset.Timeout = timeout
+			cfg.ExecPresets[name] = preset
+		}
+	}
+	for name, template := range cfg.CommandTemplates {
+		if template.Timeout == previous {
+			template.Timeout = timeout
+			cfg.CommandTemplates[name] = template
+		}
+	}
+}
+
 func mergeExecPresets(base map[string]ExecPreset, overrides map[string]fileExecPreset, baseDir string, defaultTimeout time.Duration) (map[string]ExecPreset, error) {
 	merged := make(map[string]ExecPreset, len(base)+len(overrides))
 	for name, preset := range base {
@@ -579,20 +753,24 @@ func mergeExecPresets(base map[string]ExecPreset, overrides map[string]fileExecP
 		if !ok {
 			preset = ExecPreset{Timeout: defaultTimeout}
 		}
-		if override.Command != "" {
-			preset.Command = resolveMaybeRelative(baseDir, override.Command)
+		if override.Command != nil {
+			preset.Command = resolveCommandName(baseDir, *override.Command)
 		}
 		if override.FixedArgs != nil {
-			preset.FixedArgs = cloneStrings(override.FixedArgs)
+			preset.FixedArgs = util.CloneStrings(override.FixedArgs)
 		}
 		if override.AllowedArgs != nil {
-			preset.AllowedArgs = cloneStrings(override.AllowedArgs)
+			preset.AllowedArgs = util.CloneStrings(override.AllowedArgs)
 		}
 		if override.Env != nil {
 			preset.Env = cloneMapStrings(override.Env)
 		}
 		if override.TimeoutSec != nil {
-			preset.Timeout = time.Duration(*override.TimeoutSec) * time.Second
+			timeout, err := durationFromUnits(*override.TimeoutSec, time.Second, fmt.Sprintf("exec preset %q timeout_sec", name))
+			if err != nil {
+				return nil, err
+			}
+			preset.Timeout = timeout
 		}
 		if override.ReadOnly != nil {
 			preset.ReadOnly = *override.ReadOnly
@@ -602,7 +780,7 @@ func mergeExecPresets(base map[string]ExecPreset, overrides map[string]fileExecP
 	return merged, nil
 }
 
-func mergeCommandTemplates(base map[string]CommandTemplate, overrides map[string]fileCommandTemplate, defaultTimeout time.Duration) (map[string]CommandTemplate, error) {
+func mergeCommandTemplates(base map[string]CommandTemplate, overrides map[string]fileCommandTemplate, baseDir string, defaultTimeout time.Duration) (map[string]CommandTemplate, error) {
 	merged := make(map[string]CommandTemplate, len(base)+len(overrides))
 	for name, template := range base {
 		merged[name] = template
@@ -620,13 +798,17 @@ func mergeCommandTemplates(base map[string]CommandTemplate, overrides map[string
 			template = CommandTemplate{Timeout: defaultTimeout}
 		}
 		if override.Command != nil {
-			template.Command = cloneStrings(override.Command)
+			template.Command = resolveCommandArgv(baseDir, override.Command)
 		}
 		if override.Env != nil {
 			template.Env = cloneMapStrings(override.Env)
 		}
 		if override.AllowedWorkdirs != nil {
-			template.AllowedWorkdirs = cloneStrings(override.AllowedWorkdirs)
+			allowedWorkdirs, err := resolveRequiredPathList(override.AllowedWorkdirs, baseDir)
+			if err != nil {
+				return nil, fmt.Errorf("command template %q allowed_workdirs: %w", name, err)
+			}
+			template.AllowedWorkdirs = allowedWorkdirs
 		}
 		if strings.TrimSpace(override.Category) != "" {
 			template.Category = strings.TrimSpace(override.Category)
@@ -638,7 +820,11 @@ func mergeCommandTemplates(base map[string]CommandTemplate, overrides map[string
 			template.RequiresConfirmation = *override.RequiresConfirmation
 		}
 		if override.TimeoutSec != nil {
-			template.Timeout = time.Duration(*override.TimeoutSec) * time.Second
+			timeout, err := durationFromUnits(*override.TimeoutSec, time.Second, fmt.Sprintf("command template %q timeout_sec", name))
+			if err != nil {
+				return nil, err
+			}
+			template.Timeout = timeout
 		}
 		if override.ReadOnly != nil {
 			template.ReadOnly = *override.ReadOnly
@@ -660,6 +846,9 @@ func validateConfig(cfg Config) error {
 	}
 	if cfg.AuditRotateMaxMB < 0 {
 		return errors.New("audit_rotate_max_mb must be non-negative")
+	}
+	if int64(cfg.AuditRotateMaxMB) > (int64(1<<63-1) / (1024 * 1024)) {
+		return errors.New("audit_rotate_max_mb is too large")
 	}
 	if cfg.AuditRotateMaxMB > 0 && cfg.AuditRotateMaxBackups <= 0 {
 		return errors.New("audit_rotate_max_backups must be positive when audit rotation is enabled")
@@ -695,16 +884,21 @@ func validateConfig(cfg Config) error {
 		return errors.New("at least one allowed root required")
 	}
 	cfg.AllowedRoots = mergeUniquePaths(nil, cfg.AllowedRoots)
+	for _, origin := range cfg.AllowedOrigins {
+		if strings.TrimSpace(origin) == "" {
+			return errors.New("allowed_origins cannot contain empty entries")
+		}
+	}
+	if len(cfg.SupportedProtocols) == 0 {
+		return errors.New("at least one supported protocol required")
+	}
 	for _, protocol := range cfg.SupportedProtocols {
 		if strings.TrimSpace(protocol) == "" {
 			return errors.New("supported_protocols cannot contain empty values")
 		}
 	}
-	for name := range cfg.GitAllowed {
-		if !knownGitSubcommands[name] {
-			return fmt.Errorf("git subcommand %q not supported", name)
-		}
-	}
+	// Git subcommand validation is done in resolveGitAllowedSubcommands
+	// (fail-fast at parse time). Here we only enforce the push ban.
 	if cfg.GitAllowed["push"] {
 		return errors.New("git push is not supported")
 	}
@@ -718,14 +912,22 @@ func validateConfig(cfg Config) error {
 		if preset.Timeout <= 0 {
 			return fmt.Errorf("exec preset %q timeout must be positive", name)
 		}
+		for _, arg := range preset.FixedArgs {
+			if strings.TrimSpace(arg) == "" {
+				return fmt.Errorf("exec preset %q cannot contain empty fixed_args entries", name)
+			}
+		}
 		for _, arg := range preset.AllowedArgs {
+			if strings.TrimSpace(arg) == "" {
+				return fmt.Errorf("exec preset %q cannot contain empty allowed_args entries", name)
+			}
 			if strings.TrimSpace(arg) == "-vettool" {
 				return fmt.Errorf("exec preset %q cannot allow -vettool", name)
 			}
 		}
 		for key := range preset.Env {
-			if strings.TrimSpace(key) == "" {
-				return fmt.Errorf("exec preset %q env cannot contain empty keys", name)
+			if err := util.ValidateEnvKey(key); err != nil {
+				return fmt.Errorf("exec preset %q env: %w", name, err)
 			}
 		}
 	}
@@ -748,6 +950,11 @@ func validateConfig(cfg Config) error {
 		}
 		if template.Timeout <= 0 {
 			return fmt.Errorf("command template %q timeout must be positive", name)
+		}
+		for key := range template.Env {
+			if err := util.ValidateEnvKey(key); err != nil {
+				return fmt.Errorf("command template %q env: %w", name, err)
+			}
 		}
 	}
 	return nil
@@ -804,7 +1011,7 @@ func resolvePathList(values []string, baseDir string) ([]string, error) {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
 		if strings.TrimSpace(value) == "" {
-			continue
+			return nil, errors.New("cannot contain empty entries")
 		}
 		resolved := resolveMaybeRelative(baseDir, value)
 		abs, err := filepath.Abs(resolved)
@@ -814,6 +1021,47 @@ func resolvePathList(values []string, baseDir string) ([]string, error) {
 		out = append(out, filepath.Clean(abs))
 	}
 	return out, nil
+}
+
+func resolveRequiredPathList(values []string, baseDir string) ([]string, error) {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			return nil, errors.New("cannot contain empty entries")
+		}
+		resolved := resolveMaybeRelative(baseDir, value)
+		abs, err := filepath.Abs(resolved)
+		if err != nil {
+			return nil, fmt.Errorf("abs path %q: %w", value, err)
+		}
+		out = append(out, filepath.Clean(abs))
+	}
+	return out, nil
+}
+
+func resolveCommandArgv(baseDir string, values []string) []string {
+	out := util.CloneStrings(values)
+	if len(out) > 0 {
+		out[0] = resolveCommandName(baseDir, out[0])
+	}
+	return out
+}
+
+func resolveCommandName(baseDir string, value string) string {
+	if value == "" {
+		return ""
+	}
+	if filepath.IsAbs(value) {
+		return filepath.Clean(value)
+	}
+	if isPathLikeCommandName(value) {
+		return resolveMaybeRelative(baseDir, value)
+	}
+	return value
+}
+
+func isPathLikeCommandName(value string) bool {
+	return strings.ContainsAny(value, `/\`)
 }
 
 func resolveMaybeRelative(baseDir string, value string) string {
@@ -826,7 +1074,7 @@ func resolveMaybeRelative(baseDir string, value string) string {
 func mergeUniquePaths(base []string, extra []string) []string {
 	seen := map[string]bool{}
 	merged := make([]string, 0, len(base)+len(extra))
-	for _, value := range append(cloneStrings(base), extra...) {
+	for _, value := range append(util.CloneStrings(base), extra...) {
 		if strings.TrimSpace(value) == "" {
 			continue
 		}
@@ -854,12 +1102,64 @@ func dedupeStrings(values []string) []string {
 	return out
 }
 
+func dedupeRequiredStrings(values []string, name string) ([]string, error) {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return nil, fmt.Errorf("%s cannot contain empty entries", name)
+		}
+		if seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		out = append(out, trimmed)
+	}
+	return out, nil
+}
+
+func resolveGitAllowedSubcommands(values []string) (map[string]bool, error) {
+	allowed := make(map[string]bool, len(values))
+	for _, value := range values {
+		name := strings.TrimSpace(value)
+		if name == "" {
+			return nil, errors.New("cannot contain empty entries")
+		}
+		if !knownGitSubcommands[name] {
+			return nil, fmt.Errorf("git subcommand %q not supported", name)
+		}
+		allowed[name] = true
+	}
+	return allowed, nil
+}
+
 func splitCSV(raw string) []string {
 	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
 	parts := strings.Split(raw, ",")
 	return dedupeStrings(parts)
+}
+
+func splitCSVStrict(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, len(parts))
+	for i, part := range parts {
+		out[i] = strings.TrimSpace(part)
+	}
+	return out
+}
+
+func durationFromUnits(value int, unit time.Duration, name string) (time.Duration, error) {
+	if value <= 0 {
+		return 0, fmt.Errorf("%s must be positive", name)
+	}
+	maxValue := int64((time.Duration(1<<63 - 1)) / unit)
+	if int64(value) > maxValue {
+		return 0, fmt.Errorf("%s is too large", name)
+	}
+	return time.Duration(value) * unit, nil
 }
 
 func parsePositiveInt(raw, name string) (int, error) {
@@ -900,24 +1200,6 @@ func isValidLogLevel(value string) bool {
 	default:
 		return false
 	}
-}
-
-func cloneStrings(values []string) []string {
-	if values == nil {
-		return nil
-	}
-	out := make([]string, len(values))
-	copy(out, values)
-	return out
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func cloneMapStrings(values map[string]string) map[string]string {

@@ -73,8 +73,12 @@ func run() error {
 		Handler:           httpapi.NewServer(cfg, registry),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 		ReadTimeout:       cfg.ReadTimeout,
-		WriteTimeout:      cfg.WriteTimeout,
-		IdleTimeout:       cfg.IdleTimeout,
+		// WriteTimeout is 0 because SSE long-poll connections may stay open
+		// indefinitely. Individual tool executions use context.WithTimeout for
+		// bounded execution, and SSE streams use heartbeats + request context for
+		// lifecycle control.
+		WriteTimeout: 0,
+		IdleTimeout:  cfg.IdleTimeout,
 	}
 
 	go func() {

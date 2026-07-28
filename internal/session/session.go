@@ -60,6 +60,12 @@ func (m *Manager) Get(id string) (Session, bool) {
 	return sess, true
 }
 
+func (m *Manager) PruneExpired() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.pruneExpiredLocked(time.Now())
+}
+
 func (m *Manager) Delete(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -70,14 +76,23 @@ func (m *Manager) Count() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.ttl > 0 {
-		now := time.Now()
-		for id, sess := range m.sessions {
-			if now.Sub(sess.LastSeen) > m.ttl {
-				delete(m.sessions, id)
-			}
-		}
+		m.pruneExpiredLocked(time.Now())
 	}
 	return len(m.sessions)
+}
+
+func (m *Manager) pruneExpiredLocked(now time.Time) []string {
+	if m.ttl <= 0 {
+		return nil
+	}
+	var expired []string
+	for id, sess := range m.sessions {
+		if now.Sub(sess.LastSeen) > m.ttl {
+			delete(m.sessions, id)
+			expired = append(expired, id)
+		}
+	}
+	return expired
 }
 
 func newID() (string, error) {

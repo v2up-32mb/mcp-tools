@@ -87,6 +87,50 @@ func initializeSessionHTTP(t *testing.T, baseURL string) string {
 	return sessionID
 }
 
+func TestSSEInitializeRejectsNonStringProtocolVersion(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":20251125,"clientInfo":{"name":"tester","version":"1.0.0"}}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected SSE error response with HTTP 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get(sessionHeader) != "" {
+		t.Fatalf("initialize should not create a session on invalid protocolVersion, got %q", rec.Header().Get(sessionHeader))
+	}
+	resp := parseSSEData(t, rec.Body.String())
+	if resp.Error == nil || resp.Error.Code != -32602 {
+		t.Fatalf("expected invalid params error, got %#v", resp)
+	}
+	if !strings.Contains(resp.Error.Message, "protocolVersion must be a string") {
+		t.Fatalf("unexpected error message: %q", resp.Error.Message)
+	}
+}
+
+func TestSSEInitializeRejectsNonObjectClientInfo(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":["tester"]}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected SSE error response with HTTP 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get(sessionHeader) != "" {
+		t.Fatalf("initialize should not create a session on invalid clientInfo, got %q", rec.Header().Get(sessionHeader))
+	}
+	resp := parseSSEData(t, rec.Body.String())
+	if resp.Error == nil || resp.Error.Code != -32602 {
+		t.Fatalf("expected invalid params error, got %#v", resp)
+	}
+	if !strings.Contains(resp.Error.Message, "clientInfo must be an object") {
+		t.Fatalf("unexpected error message: %q", resp.Error.Message)
+	}
+}
+
 func startSSEStream(t *testing.T, baseURL, sessionID string) (chan rpcResponse, chan error, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -492,6 +536,41 @@ func TestSSEResourceReadFile(t *testing.T) {
 	}
 }
 
+func TestSSEResourcesRejectNonStringURI(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSessionSSE(t, handler)
+
+	for _, method := range []string{"resources/read", "resources/subscribe", "resources/unsubscribe"} {
+		t.Run(method, func(t *testing.T) {
+			payload := map[string]any{
+				"jsonrpc": "2.0",
+				"id":      601,
+				"method":  method,
+				"params": map[string]any{
+					"uri": 123,
+				},
+			}
+			body, _ := json.Marshal(payload)
+			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer secret")
+			req.Header.Set(sessionHeader, sessionID)
+			req.Header.Set("Accept", "text/event-stream")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200 SSE error, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			resp := parseSSEData(t, rec.Body.String())
+			if resp.Error == nil || resp.Error.Code != -32602 {
+				t.Fatalf("expected invalid params error, got %#v", resp)
+			}
+			if !strings.Contains(resp.Error.Message, "must be a string") {
+				t.Fatalf("expected type error, got %#v", resp.Error)
+			}
+		})
+	}
+}
+
 func TestSSEPromptsList(t *testing.T) {
 	handler, _, _ := newTestServer(t)
 	sessionID := initializeSessionSSE(t, handler)
@@ -572,6 +651,65 @@ func TestSSEPromptGet(t *testing.T) {
 	}
 }
 
+func TestSSEPromptGetRejectsNonObjectArguments(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSessionSSE(t, handler)
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      17,
+		"method":  "prompts/get",
+		"params": map[string]any{
+			"name":      "go_dev_loop",
+			"arguments": []any{"not", "an", "object"},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 SSE error, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	resp := parseSSEData(t, rec.Body.String())
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "arguments must be an object") {
+		t.Fatalf("expected arguments type error, got %#v body=%s", resp.Error, rec.Body.String())
+	}
+}
+
+func TestSSEPromptGetRejectsNonStringName(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSessionSSE(t, handler)
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      41,
+		"method":  "prompts/get",
+		"params": map[string]any{
+			"name": []any{"go_dev_loop"},
+			"arguments": map[string]any{
+				"goal":    "ship",
+				"workdir": "/tmp/work",
+			},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 SSE error, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	resp := parseSSEData(t, rec.Body.String())
+	if resp.Error == nil || resp.Error.Code != -32602 || !strings.Contains(resp.Error.Message, "prompt name must be a string") {
+		t.Fatalf("expected prompt name type error, got %#v body=%s", resp.Error, rec.Body.String())
+	}
+}
+
 func TestSSECompletionComplete(t *testing.T) {
 	handler, dir, _ := newTestServer(t)
 	sessionID := initializeSessionSSE(t, handler)
@@ -618,6 +756,37 @@ func TestSSECompletionComplete(t *testing.T) {
 	}
 	if len(result.Completion.Values) == 0 || result.Completion.Values[0] != "README.md" {
 		t.Fatalf("unexpected completion values: %#v", result.Completion.Values)
+	}
+}
+
+func TestSSECompletionCompleteRejectsNonObjectArgument(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSessionSSE(t, handler)
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      18,
+		"method":  "completion/complete",
+		"params": map[string]any{
+			"ref": map[string]any{
+				"type": "ref/prompt",
+				"name": "safe_file_edit",
+			},
+			"argument": []any{"not", "an", "object"},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 SSE error, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	resp := parseSSEData(t, rec.Body.String())
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "argument must be an object") {
+		t.Fatalf("expected argument type error, got %#v body=%s", resp.Error, rec.Body.String())
 	}
 }
 
@@ -744,6 +913,57 @@ func TestSSEEditLinesAndAudit(t *testing.T) {
 	}
 	if !bytes.Contains(auditPayload, []byte("fs.edit_lines")) {
 		t.Fatalf("missing audit entry: %s", auditPayload)
+	}
+}
+
+func TestSSEToolsCallMissingNameReturnsRPCInvalidParams(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSessionSSE(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":120,"method":"tools/call","params":{"arguments":{}}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	resp := parseSSEData(t, rec.Body.String())
+	if resp.Error == nil {
+		t.Fatalf("expected JSON-RPC invalid params error, got result=%#v", resp.Result)
+	}
+	if resp.Error.Code != -32602 {
+		t.Fatalf("expected invalid params code, got %#v", resp.Error)
+	}
+}
+
+func TestSSEToolsCallRejectsNonStringName(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSessionSSE(t, handler)
+
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      121,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      []any{"fs.list_dir"},
+			"arguments": map[string]any{},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 SSE error, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	resp := parseSSEData(t, rec.Body.String())
+	if resp.Error == nil || resp.Error.Code != -32602 || !strings.Contains(resp.Error.Message, "tool name must be a string") {
+		t.Fatalf("expected tool name type error, got %#v body=%s", resp.Error, rec.Body.String())
 	}
 }
 
@@ -992,7 +1212,7 @@ func TestSSEAsyncToolErrorPublishesIsErrorResult(t *testing.T) {
 	}
 }
 
-func TestSSESubscribedResourceReceivesUpdatedNotification(t *testing.T) {
+func TestSSESubscribedResourceReceivesUpdatedNotificationForEquivalentURI(t *testing.T) {
 	handler, dir, _ := newTestServer(t)
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
@@ -1005,13 +1225,14 @@ func TestSSESubscribedResourceReceivesUpdatedNotification(t *testing.T) {
 	if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	nonCanonicalTarget := dir + string(filepath.Separator) + "." + string(filepath.Separator) + filepath.Base(target)
 
 	subscribePayload := map[string]any{
 		"jsonrpc": "2.0",
 		"id":      20,
 		"method":  "resources/subscribe",
 		"params": map[string]any{
-			"uri": "file://" + target,
+			"uri": "file://" + nonCanonicalTarget,
 		},
 	}
 	body, _ := json.Marshal(subscribePayload)

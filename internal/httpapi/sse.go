@@ -3,12 +3,12 @@ package httpapi
 import (
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/example/mcp-tools/internal/mcp"
 )
 
 const (
@@ -145,27 +145,34 @@ func (h *streamHub) publishNotification(sessionID string, method string, params 
 }
 
 func acceptsSSE(r *http.Request) bool {
-	accept := r.Header.Get("Accept")
-	if accept == "" {
-		return false
-	}
-	for _, part := range strings.Split(accept, ",") {
-		part = strings.TrimSpace(part)
-		if part == contentTypeSSE || strings.HasPrefix(part, contentTypeSSE+";") {
-			return true
-		}
-	}
-	return false
+	return acceptsMediaType(r, contentTypeSSE)
 }
 
 func acceptsJSON(r *http.Request) bool {
+	return acceptsMediaType(r, "application/json")
+}
+
+func acceptsMediaType(r *http.Request, target string) bool {
 	accept := r.Header.Get("Accept")
 	if strings.TrimSpace(accept) == "" {
 		return false
 	}
 	for _, part := range strings.Split(accept, ",") {
 		part = strings.TrimSpace(part)
-		if part == "application/json" || strings.HasPrefix(part, "application/json;") {
+		mediaType, params, err := mime.ParseMediaType(part)
+		if err != nil {
+			continue
+		}
+		if !strings.EqualFold(mediaType, target) {
+			continue
+		}
+		if quality, ok := params["q"]; ok {
+			value, err := strconv.ParseFloat(quality, 64)
+			if err == nil && value <= 0 {
+				continue
+			}
+		}
+		if part != "" {
 			return true
 		}
 	}
@@ -227,19 +234,37 @@ func (s *Server) handleMCPSSE(w http.ResponseWriter, r *http.Request, req rpcReq
 			if sess, ok := s.lookupSession(sessionID); ok {
 				w.Header().Set(protocolHeader, sess.ProtocolVersion)
 			}
-			if s.tryPublishToStream(r, req, sessionID) {
+			resp, built := s.buildStreamResponse(r, req, sessionID)
+			if built && strings.HasPrefix(req.Method, "notifications/") {
+				writeAccepted(w)
+				return
+			}
+			if built && s.streams.publish(sessionID, resp) {
 				if trackAsyncAttempt {
 					s.metrics.asyncStreamPublished.Add(1)
 				}
-				writeNoContent(w)
+				writeAccepted(w)
 				return
 			}
 			if trackAsyncAttempt {
 				s.metrics.asyncStreamFallbacks.Add(1)
 			}
+			if built {
+				s.writeSingleShotSSE(w, req.ID, resp)
+				return
+			}
 		}
 	}
 	s.handleSingleShotSSE(w, r, req)
+}
+
+func (s *Server) writeSingleShotSSE(w http.ResponseWriter, id any, resp rpcResponse) {
+	sw, ok := newSSEWriter(w)
+	if !ok {
+		writeRPCError(w, id, http.StatusInternalServerError, -32005, "streaming not supported", nil)
+		return
+	}
+	_ = sw.writeEvent(sseEventMessage, resp)
 }
 
 func (s *Server) handleSingleShotSSE(w http.ResponseWriter, r *http.Request, req rpcRequest) {
@@ -255,14 +280,25 @@ func (s *Server) handleSingleShotSSE(w http.ResponseWriter, r *http.Request, req
 
 	switch req.Method {
 	case "initialize":
-		requested := nestedString(req.Params, "protocolVersion")
+		requested, err := initializeProtocolVersion(req.Params)
+		if err != nil {
+			s.debugLogRejected(r, &req, http.StatusOK, -32602, err.Error(), map[string]any{"transport": "single_shot_sse"})
+			_ = sw.writeRPCError(req.ID, -32602, err.Error(), nil)
+			return
+		}
 		protocol, ok := chooseProtocol(requested, s.cfg.SupportedProtocols)
 		if !ok {
 			s.debugLogRejected(r, &req, http.StatusOK, -32002, "unsupported protocol version", map[string]any{"supported_protocols": s.cfg.SupportedProtocols, "transport": "single_shot_sse"})
 			_ = sw.writeRPCError(req.ID, -32002, "unsupported protocol version", map[string]any{"supported": s.cfg.SupportedProtocols})
 			return
 		}
-		sess, err := s.sessions.Create(protocol, nestedMap(req.Params, "clientInfo"))
+		clientInfo, err := optionalObjectParamWithName(req.Params, "clientInfo", "clientInfo")
+		if err != nil {
+			s.debugLogRejected(r, &req, http.StatusOK, -32602, err.Error(), map[string]any{"transport": "single_shot_sse"})
+			_ = sw.writeRPCError(req.ID, -32602, err.Error(), nil)
+			return
+		}
+		sess, err := s.sessions.Create(protocol, clientInfo)
 		if err != nil {
 			_ = sw.writeRPCError(req.ID, -32603, "create session failed", nil)
 			return
@@ -293,7 +329,11 @@ func (s *Server) handleSingleShotSSE(w http.ResponseWriter, r *http.Request, req
 			_ = sw.writeRPCError(req.ID, -32003, "missing or invalid session", nil)
 			return
 		}
-		uri, _ := req.Params["uri"].(string)
+		uri, err := resourceURIParam(req.Params)
+		if err != nil {
+			_ = sw.writeRPCError(req.ID, -32602, err.Error(), nil)
+			return
+		}
 		result, err := s.readResource(uri)
 		if err != nil {
 			_ = sw.writeRPCError(req.ID, -32602, err.Error(), nil)
@@ -305,24 +345,30 @@ func (s *Server) handleSingleShotSSE(w http.ResponseWriter, r *http.Request, req
 			_ = sw.writeRPCError(req.ID, -32003, "missing or invalid session", nil)
 			return
 		}
-		uri, _ := req.Params["uri"].(string)
-		if _, err := s.readResource(uri); err != nil {
+		uri, err := resourceURIParam(req.Params)
+		if err != nil {
 			_ = sw.writeRPCError(req.ID, -32602, err.Error(), nil)
 			return
 		}
-		s.resSubs.subscribe(r.Header.Get(sessionHeader), uri)
+		if err := s.subscribeResource(r.Header.Get(sessionHeader), uri); err != nil {
+			_ = sw.writeRPCError(req.ID, -32602, err.Error(), nil)
+			return
+		}
 		_ = sw.writeRPC(req.ID, map[string]any{})
 	case "resources/unsubscribe":
 		if _, ok := s.requireSessionForMode(w, r, req.ID, true); !ok {
 			_ = sw.writeRPCError(req.ID, -32003, "missing or invalid session", nil)
 			return
 		}
-		uri, _ := req.Params["uri"].(string)
-		if strings.TrimSpace(uri) == "" {
-			_ = sw.writeRPCError(req.ID, -32602, "resource uri required", nil)
+		uri, err := resourceURIParam(req.Params)
+		if err != nil {
+			_ = sw.writeRPCError(req.ID, -32602, err.Error(), nil)
 			return
 		}
-		s.resSubs.unsubscribe(r.Header.Get(sessionHeader), uri)
+		if err := s.unsubscribeResource(r.Header.Get(sessionHeader), uri); err != nil {
+			_ = sw.writeRPCError(req.ID, -32602, err.Error(), nil)
+			return
+		}
 		_ = sw.writeRPC(req.ID, map[string]any{})
 	case "prompts/list":
 		if _, ok := s.requireSessionForMode(w, r, req.ID, true); !ok {
@@ -335,10 +381,9 @@ func (s *Server) handleSingleShotSSE(w http.ResponseWriter, r *http.Request, req
 			_ = sw.writeRPCError(req.ID, -32003, "missing or invalid session", nil)
 			return
 		}
-		name, _ := req.Params["name"].(string)
-		result, err := s.getPrompt(name, normalizeMap(req.Params["arguments"]))
-		if err != nil {
-			_ = sw.writeRPCError(req.ID, -32602, err.Error(), nil)
+		result, rpcErr := s.promptGetResult(req)
+		if rpcErr != nil {
+			_ = sw.writeRPCError(req.ID, rpcErr.Code, rpcErr.Message, rpcErr.Data)
 			return
 		}
 		_ = sw.writeRPC(req.ID, result)
@@ -354,9 +399,14 @@ func (s *Server) handleSingleShotSSE(w http.ResponseWriter, r *http.Request, req
 		}
 		_ = sw.writeRPC(req.ID, result)
 	case "tools/call":
-		result, ok := s.callTool(r, req, w, true)
+		sess, ok := s.requireSessionForMode(w, r, req.ID, true)
 		if !ok {
 			_ = sw.writeRPCError(req.ID, -32003, "missing or invalid session", nil)
+			return
+		}
+		result, rpcErr := s.callToolWithSession(r, req, sess)
+		if rpcErr != nil {
+			_ = sw.writeRPCError(req.ID, rpcErr.Code, rpcErr.Message, rpcErr.Data)
 			return
 		}
 		_ = sw.writeRPC(req.ID, result)
@@ -365,17 +415,6 @@ func (s *Server) handleSingleShotSSE(w http.ResponseWriter, r *http.Request, req
 	default:
 		_ = sw.writeRPCError(req.ID, -32601, fmt.Sprintf("unknown method %q", req.Method), nil)
 	}
-}
-
-func (s *Server) tryPublishToStream(r *http.Request, req rpcRequest, sessionID string) bool {
-	resp, ok := s.buildStreamResponse(r, req, sessionID)
-	if !ok {
-		return false
-	}
-	if strings.HasPrefix(req.Method, "notifications/") {
-		return true
-	}
-	return s.streams.publish(sessionID, resp)
 }
 
 func (s *Server) buildStreamResponse(r *http.Request, req rpcRequest, sessionID string) (rpcResponse, bool) {
@@ -410,7 +449,10 @@ func (s *Server) buildStreamResponse(r *http.Request, req rpcRequest, sessionID 
 		if sess.ID == "" {
 			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32004, Message: "invalid or expired session"}}, true
 		}
-		uri, _ := req.Params["uri"].(string)
+		uri, err := resourceURIParam(req.Params)
+		if err != nil {
+			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32602, Message: err.Error()}}, true
+		}
 		result, err := s.readResource(uri)
 		if err != nil {
 			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32602, Message: err.Error()}}, true
@@ -420,21 +462,25 @@ func (s *Server) buildStreamResponse(r *http.Request, req rpcRequest, sessionID 
 		if sess.ID == "" {
 			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32004, Message: "invalid or expired session"}}, true
 		}
-		uri, _ := req.Params["uri"].(string)
-		if _, err := s.readResource(uri); err != nil {
+		uri, err := resourceURIParam(req.Params)
+		if err != nil {
 			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32602, Message: err.Error()}}, true
 		}
-		s.resSubs.subscribe(sessionID, uri)
+		if err := s.subscribeResource(sessionID, uri); err != nil {
+			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32602, Message: err.Error()}}, true
+		}
 		return rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{}}, true
 	case "resources/unsubscribe":
 		if sess.ID == "" {
 			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32004, Message: "invalid or expired session"}}, true
 		}
-		uri, _ := req.Params["uri"].(string)
-		if strings.TrimSpace(uri) == "" {
-			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32602, Message: "resource uri required"}}, true
+		uri, err := resourceURIParam(req.Params)
+		if err != nil {
+			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32602, Message: err.Error()}}, true
 		}
-		s.resSubs.unsubscribe(sessionID, uri)
+		if err := s.unsubscribeResource(sessionID, uri); err != nil {
+			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32602, Message: err.Error()}}, true
+		}
 		return rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{}}, true
 	case "prompts/list":
 		if sess.ID == "" {
@@ -445,10 +491,9 @@ func (s *Server) buildStreamResponse(r *http.Request, req rpcRequest, sessionID 
 		if sess.ID == "" {
 			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32004, Message: "invalid or expired session"}}, true
 		}
-		name, _ := req.Params["name"].(string)
-		result, err := s.getPrompt(name, normalizeMap(req.Params["arguments"]))
-		if err != nil {
-			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32602, Message: err.Error()}}, true
+		result, rpcErr := s.promptGetResult(req)
+		if rpcErr != nil {
+			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: rpcErr}, true
 		}
 		return rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: result}, true
 	case "completion/complete":
@@ -464,21 +509,10 @@ func (s *Server) buildStreamResponse(r *http.Request, req rpcRequest, sessionID 
 		if sess.ID == "" {
 			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32004, Message: "invalid or expired session"}}, true
 		}
-		toolName, _ := req.Params["name"].(string)
-		if strings.TrimSpace(toolName) == "" {
-			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: mcpErrorResult("tool name required")}, true
+		result, rpcErr := s.callToolWithSession(r, req, sess)
+		if rpcErr != nil {
+			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: rpcErr}, true
 		}
-		args := normalizeMap(req.Params["arguments"])
-		result, err := s.registry.Call(r.Context(), mcp.CallContext{
-			RemoteAddr:      r.RemoteAddr,
-			RequestID:       requestID(r),
-			SessionID:       sess.ID,
-			ProtocolVersion: sess.ProtocolVersion,
-		}, toolName, args)
-		if err != nil {
-			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: mcpErrorResult(err.Error())}, true
-		}
-		s.maybeNotifyResourceUpdated(toolName, args, result)
 		return rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: result}, true
 	case "ping":
 		return rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{}}, true
@@ -596,14 +630,4 @@ func (r *resourceSubscriptions) totalCount() int {
 		total += len(uris)
 	}
 	return total
-}
-
-func mcpErrorResult(message string) map[string]any {
-	return map[string]any{
-		"content": []map[string]any{{"type": "text", "text": message}},
-		"structuredContent": map[string]any{
-			"error": message,
-		},
-		"isError": true,
-	}
 }
