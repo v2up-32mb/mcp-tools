@@ -94,6 +94,11 @@ func run() error {
 		applog.Field{Key: "log_level", Value: cfg.LogLevel},
 		applog.Field{Key: "audit_log_path", Value: cfg.AuditLogPath},
 	)
+	if cfg.UnsafeAllowAll {
+		applog.Default().Warn("mcp.server", "!! WARNING: unsafe_allow_all is enabled !!")
+		applog.Default().Warn("mcp.server", "All path, workdir, git, and exec restrictions are BYPASSED for authorized clients.")
+		applog.Default().Warn("mcp.server", "exec.run can execute arbitrary commands. Set unsafe_allow_all=false or MCP_UNSAFE_ALLOW_ALL=false to restore restrictions.")
+	}
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
@@ -103,30 +108,31 @@ func run() error {
 
 func printConfigSummary(cfg config.Config) error {
 	summary := map[string]any{
-		"listen_addr":              cfg.ListenAddr,
-		"log_level":                cfg.LogLevel,
-		"unsafe_allow_all":         cfg.UnsafeAllowAll,
-		"allowed_roots":            cfg.AllowedRoots,
-		"allowed_origins":          cfg.AllowedOrigins,
-		"audit_log_path":           cfg.AuditLogPath,
-		"audit_rotate_max_mb":      cfg.AuditRotateMaxMB,
-		"audit_rotate_max_backups": cfg.AuditRotateMaxBackups,
-		"command_timeout_sec":      int(cfg.CommandTimeout / time.Second),
-		"output_max_bytes":         cfg.OutputMaxBytes,
-		"stream_queue_size":        cfg.StreamQueueSize,
-		"max_request_bytes":        cfg.MaxRequestBytes,
-		"read_header_timeout":      int(cfg.ReadHeaderTimeout / time.Second),
-		"read_timeout":             int(cfg.ReadTimeout / time.Second),
-		"write_timeout":            int(cfg.WriteTimeout / time.Second),
-		"idle_timeout":             int(cfg.IdleTimeout / time.Second),
-		"session_ttl_min":          int(cfg.SessionTTL / time.Minute),
-		"server_name":              cfg.ServerName,
-		"server_version":           cfg.ServerVersion,
-		"supported_protocols":      cfg.SupportedProtocols,
-		"git_allowed":              sortedTrueKeys(cfg.GitAllowed),
-		"exec_presets":             sortedPresetNames(cfg.ExecPresets),
-		"command_templates":        sortedTemplateNames(cfg.CommandTemplates),
-		"bearer_token_present":     cfg.BearerToken != "",
+		"listen_addr":                         cfg.ListenAddr,
+		"log_level":                           cfg.LogLevel,
+		"unsafe_allow_all":                    cfg.UnsafeAllowAll,
+		"allowed_roots":                       cfg.AllowedRoots,
+		"!!_warning_unsafe_allow_all_enabled": cfg.UnsafeAllowAll,
+		"allowed_origins":                     cfg.AllowedOrigins,
+		"audit_log_path":                      cfg.AuditLogPath,
+		"audit_rotate_max_mb":                 cfg.AuditRotateMaxMB,
+		"audit_rotate_max_backups":            cfg.AuditRotateMaxBackups,
+		"command_timeout_sec":                 int(cfg.CommandTimeout / time.Second),
+		"output_max_bytes":                    cfg.OutputMaxBytes,
+		"stream_queue_size":                   cfg.StreamQueueSize,
+		"max_request_bytes":                   cfg.MaxRequestBytes,
+		"read_header_timeout":                 int(cfg.ReadHeaderTimeout / time.Second),
+		"read_timeout":                        int(cfg.ReadTimeout / time.Second),
+		"write_timeout":                       int(cfg.WriteTimeout / time.Second),
+		"idle_timeout":                        int(cfg.IdleTimeout / time.Second),
+		"session_ttl_min":                     int(cfg.SessionTTL / time.Minute),
+		"server_name":                         cfg.ServerName,
+		"server_version":                      cfg.ServerVersion,
+		"supported_protocols":                 cfg.SupportedProtocols,
+		"git_allowed":                         sortedTrueKeys(cfg.GitAllowed),
+		"exec_presets":                        sortedPresetNames(cfg.ExecPresets),
+		"command_templates":                   sortedTemplateNames(cfg.CommandTemplates),
+		"bearer_token_present":                cfg.BearerToken != "",
 	}
 	encoded, err := json.MarshalIndent(summary, "", "  ")
 	if err != nil {

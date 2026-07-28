@@ -2,7 +2,19 @@
 
 一个基于 Go 1.20 的单体 MCP HTTP 服务，提供文件系统、Git、Go 导航与命令执行能力，供远程 AI 代理通过 MCP 调用本地工具。
 
-当前 `yolo` 分支默认开启：
+> ⚠️ **安全警告：`unsafe_allow_all` 默认启用**
+>
+> 本仓库默认配置 `unsafe_allow_all: true`，启用后：
+> - `fs.*` 工具可访问 `allowed_roots` 之外的任意文件路径
+> - `exec.run` 可执行任意 `command + args + env`（不再限于 Go preset）
+> - `git.*` 的 `repo_path` 可以指向任意 Git 仓库
+> - 模板的 `requires_confirmation` 和 `allowed_workdirs` 限制被旁路
+>
+> 所有操作仍需有效的 Bearer Token 并保留审计日志，但路径和命令限制被完全放开。
+> **在生产环境部署时，请通过环境变量 `MCP_UNSAFE_ALLOW_ALL=false` 或配置文件 `unsafe_allow_all: false` 关闭此模式。**
+> 服务启动时会在控制台日志中输出显著 WARN 告警。
+
+当前默认开启：
 
 ```yaml
 unsafe_allow_all: true

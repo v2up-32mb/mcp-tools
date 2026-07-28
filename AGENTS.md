@@ -13,7 +13,14 @@
 
 这是一个基于 Go 1.20 的单体 MCP 服务，主要面向“远程 AI 代理操作本地工作区”的场景。
 
-当前 `yolo` 分支默认开启：
+> ⚠️ **安全警告：`unsafe_allow_all` 默认启用**
+>
+> 本配置默认为 `true`，启用后对已授权客户端放开所有路径、工作目录、Git 仓库和命令执行限制。
+> `exec.run` 可执行任意命令，详见 `README.md` 和 `TOOLS-DEFINE.md` 中的安全边界说明。
+> **生产环境请通过 `MCP_UNSAFE_ALLOW_ALL=false` 或配置文件 `unsafe_allow_all: false` 关闭。**
+> 服务启动时会在控制台输出 WARN 级别告警。
+
+当前默认开启：
 
 - `unsafe_allow_all = true`
 
