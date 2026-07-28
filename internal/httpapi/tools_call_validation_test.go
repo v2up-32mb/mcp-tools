@@ -179,3 +179,61 @@ func TestToolsCallRejectsNonStringName(t *testing.T) {
 		t.Fatalf("expected name type error, got %s", rec.Body.String())
 	}
 }
+
+func TestToolsCallRejectsUnknownToolName(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSession(t, handler)
+
+	body, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "nonexistent.tool",
+			"arguments": map[string]any{},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unknown tool, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	errObj := decoded["error"].(map[string]any)
+	if errObj["code"].(float64) != -32010 {
+		t.Fatalf("expected unknown-tool error code -32010, got %#v", errObj)
+	}
+}
+
+func TestToolsCallRejectsMissingNameParam(t *testing.T) {
+	handler, _, _ := newTestServer(t)
+	sessionID := initializeSession(t, handler)
+
+	body, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"arguments": map[string]any{},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing name, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("tool name required")) {
+		t.Fatalf("expected \"tool name required\" error message, got %s", rec.Body.String())
+	}
+}

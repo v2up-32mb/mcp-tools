@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -262,4 +263,564 @@ func findGitTool(t *testing.T, cfg config.Config, name string) mcp.Tool {
 	}
 	t.Fatalf("%s tool not found", name)
 	return nil
+}
+
+func TestGitStatusRejectsUnauthorizedSubcommand(t *testing.T) {
+	repoDir := initGitRepo(t)
+	cfg := config.Config{
+		AllowedRoots:     []string{repoDir},
+		StartupDirectory: repoDir,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		GitAllowed:       map[string]bool{"add": true},
+	}
+	tool := findGitTool(t, cfg, "git.status")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"repo_path": repoDir,
+	})
+	if err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("expected not-allowed error, got %v", err)
+	}
+}
+
+func TestGitPushToolNotRegistered(t *testing.T) {
+	cfg := config.Config{}
+	for _, candidate := range NewTools(cfg) {
+		if candidate.Name() == "git.push" {
+			t.Fatalf("git.push tool should not be registered, found %#v", candidate)
+		}
+	}
+}
+
+func TestRepoRelativePathsRejectsOptionPrefix(t *testing.T) {
+	_, err := repoRelativePaths([]any{"-foo"})
+	if err == nil {
+		t.Fatal("expected option-prefixed path to be rejected")
+	}
+	if !strings.Contains(err.Error(), "repo-relative") {
+		t.Fatalf("expected repo-relative error, got %v", err)
+	}
+}
+
+func TestGitCommitHappyPath(t *testing.T) {
+	repoDir := initGitRepo(t)
+	for _, c := range []struct{ args []string }{
+		{args: []string{"config", "user.name", "test"}},
+		{args: []string{"config", "user.email", "test@example.com"}},
+	} {
+		cmd := exec.Command("git", c.args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v output=%s", c.args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "a.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	addCmd := exec.Command("git", "add", "a.txt")
+	addCmd.Dir = repoDir
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add failed: %v output=%s", err, out)
+	}
+
+	cfg := config.Config{
+		AllowedRoots:     []string{repoDir},
+		StartupDirectory: repoDir,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		GitAllowed:       map[string]bool{"commit": true},
+	}
+	tool := findGitTool(t, cfg, "git.commit")
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"repo_path": repoDir,
+		"message":   "init",
+	})
+	if err != nil {
+		t.Fatalf("git.commit failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %#v", res)
+	}
+	text := res.Content[0].Text
+	if !strings.Contains(text, "master") && !strings.Contains(text, "main") && !strings.Contains(text, "init") {
+		t.Fatalf("expected commit output to reference branch or commit, got %q", text)
+	}
+}
+
+func TestGitSwitchHappyPath(t *testing.T) {
+	repoDir := initGitRepo(t)
+	for _, args := range [][]string{
+		{"config", "user.name", "test"},
+		{"config", "user.email", "test@example.com"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v output=%s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "a.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	addCmd := exec.Command("git", "add", "a.txt")
+	addCmd.Dir = repoDir
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add failed: %v output=%s", err, out)
+	}
+	commitCmd := exec.Command("git", "commit", "-m", "init")
+	commitCmd.Dir = repoDir
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit failed: %v output=%s", err, out)
+	}
+	branchCmd := exec.Command("git", "branch", "new-branch")
+	branchCmd.Dir = repoDir
+	if out, err := branchCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git branch failed: %v output=%s", err, out)
+	}
+
+	cfg := config.Config{
+		AllowedRoots:     []string{repoDir},
+		StartupDirectory: repoDir,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		GitAllowed:       map[string]bool{"switch": true},
+	}
+	tool := findGitTool(t, cfg, "git.switch")
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"repo_path": repoDir,
+		"branch":    "new-branch",
+	})
+	if err != nil {
+		t.Fatalf("git.switch failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %#v", res)
+	}
+
+	verifyCmd := exec.Command("git", "branch", "--show-current")
+	verifyCmd.Dir = repoDir
+	out, err := verifyCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git branch --show-current failed: %v output=%s", err, out)
+	}
+	if strings.TrimSpace(string(out)) != "new-branch" {
+		t.Fatalf("expected current branch new-branch, got %q", strings.TrimSpace(string(out)))
+	}
+}
+
+func TestGitLogDefaultLimitReturns20CapButShowsAllCommits(t *testing.T) {
+	repoDir := initGitRepo(t)
+	for _, args := range [][]string{
+		{"config", "user.name", "test"},
+		{"config", "user.email", "test@example.com"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v output=%s", args, err, out)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		name := fmt.Sprintf("file%d.txt", i)
+		if err := os.WriteFile(filepath.Join(repoDir, name), []byte(name+"\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		addCmd := exec.Command("git", "add", name)
+		addCmd.Dir = repoDir
+		if out, err := addCmd.CombinedOutput(); err != nil {
+			t.Fatalf("git add %s failed: %v output=%s", name, err, out)
+		}
+		commitCmd := exec.Command("git", "commit", "-m", "commit "+name)
+		commitCmd.Dir = repoDir
+		if out, err := commitCmd.CombinedOutput(); err != nil {
+			t.Fatalf("git commit %s failed: %v output=%s", name, err, out)
+		}
+	}
+
+	cfg := config.Config{
+		AllowedRoots:     []string{repoDir},
+		StartupDirectory: repoDir,
+		OutputMaxBytes:   1 << 16,
+		CommandTimeout:   5 * time.Second,
+		GitAllowed:       map[string]bool{"log": true},
+	}
+	tool := findGitTool(t, cfg, "git.log")
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"repo_path": repoDir,
+	})
+	if err != nil {
+		t.Fatalf("git.log failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %#v", res)
+	}
+	text := res.Content[0].Text
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 log lines, got %d: %q", len(lines), text)
+	}
+}
+
+func TestGitOutputMaxBytesTruncation(t *testing.T) {
+	repoDir := initGitRepo(t)
+	for _, args := range [][]string{
+		{"config", "user.name", "test"},
+		{"config", "user.email", "test@example.com"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v output=%s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "longfile.txt"), []byte("this is a long enough line to exceed 5 bytes\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	addCmd := exec.Command("git", "add", "longfile.txt")
+	addCmd.Dir = repoDir
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add failed: %v output=%s", err, out)
+	}
+
+	cfg := config.Config{
+		AllowedRoots:     []string{repoDir},
+		StartupDirectory: repoDir,
+		OutputMaxBytes:   5,
+		CommandTimeout:   5 * time.Second,
+		GitAllowed:       map[string]bool{"status": true},
+	}
+	tool := findGitTool(t, cfg, "git.status")
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"repo_path": repoDir,
+	})
+	if err != nil {
+		t.Fatalf("git.status failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %#v", res)
+	}
+	stdout, _ := res.StructuredContent["stdout"].(string)
+	if !strings.Contains(stdout, "[truncated]") {
+		t.Fatalf("expected stdout to be truncated, got %q", stdout)
+	}
+}
+
+func TestParseLogLimitNilReturnsDefault20(t *testing.T) {
+	got, err := parseLogLimit(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 20 {
+		t.Fatalf("expected default limit 20, got %d", got)
+	}
+}
+
+func TestGitAddRejectsEmptyPaths(t *testing.T) {
+	repoDir := initGitRepo(t)
+	cfg := config.Config{
+		AllowedRoots:     []string{repoDir},
+		StartupDirectory: repoDir,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		GitAllowed:       map[string]bool{"add": true},
+	}
+	tool := findGitTool(t, cfg, "git.add")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"repo_path": repoDir,
+	})
+	if err == nil {
+		t.Fatal("expected error for empty paths")
+	}
+	if !strings.Contains(err.Error(), "paths required") {
+		t.Fatalf("expected 'paths required' error, got %v", err)
+	}
+}
+
+func TestGitCommitNothingToCommitFailsGracefully(t *testing.T) {
+	repoDir := initGitRepo(t)
+	for _, args := range [][]string{
+		{"config", "user.name", "test"},
+		{"config", "user.email", "test@example.com"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v output=%s", args, err, out)
+		}
+	}
+	// No files staged — git commit should fail.
+	cfg := config.Config{
+		AllowedRoots:     []string{repoDir},
+		StartupDirectory: repoDir,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		GitAllowed:       map[string]bool{"commit": true},
+	}
+	tool := findGitTool(t, cfg, "git.commit")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"repo_path": repoDir,
+		"message":   "empty",
+	})
+	if err == nil {
+		t.Fatal("expected error when committing with nothing staged")
+	}
+}
+
+func TestGitAddAddsFilesInRepo(t *testing.T) {
+	repoDir := initGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repoDir, "test.txt"), []byte("content\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	cfg := config.Config{
+		AllowedRoots:     []string{repoDir},
+		StartupDirectory: repoDir,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		GitAllowed:       map[string]bool{"add": true},
+	}
+	tool := findGitTool(t, cfg, "git.add")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"repo_path": repoDir,
+		"paths":     []any{"test.txt"},
+	})
+	if err != nil {
+		t.Fatalf("git.add failed: %v", err)
+	}
+	verifyCmd := exec.Command("git", "diff", "--cached", "--name-only")
+	verifyCmd.Dir = repoDir
+	out, err := verifyCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git diff --cached failed: %v output=%s", err, out)
+	}
+	if strings.TrimSpace(string(out)) != "test.txt" {
+		t.Fatalf("expected test.txt in staged files, got %q", out)
+	}
+}
+
+func TestGitRestoreRestoresModifiedFile(t *testing.T) {
+	repoDir := initGitRepo(t)
+	for _, args := range [][]string{
+		{"config", "user.name", "test"},
+		{"config", "user.email", "test@example.com"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v output=%s", args, err, out)
+		}
+	}
+	// Commit a file so the index has a known-good version.
+	if err := os.WriteFile(filepath.Join(repoDir, "a.txt"), []byte("committed\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	addCmd := exec.Command("git", "add", "a.txt")
+	addCmd.Dir = repoDir
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add failed: %v output=%s", err, out)
+	}
+	commitCmd := exec.Command("git", "commit", "-m", "init")
+	commitCmd.Dir = repoDir
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit failed: %v output=%s", err, out)
+	}
+
+	// Modify the working-copy of the committed file (not staged).
+	if err := os.WriteFile(filepath.Join(repoDir, "a.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	cfg := config.Config{
+		AllowedRoots:     []string{repoDir},
+		StartupDirectory: repoDir,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		GitAllowed:       map[string]bool{"restore": true},
+	}
+	tool := findGitTool(t, cfg, "git.restore")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"repo_path": repoDir,
+		"paths":     []any{"a.txt"},
+	})
+	if err != nil {
+		t.Fatalf("git.restore failed: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(repoDir, "a.txt"))
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if string(got) != "committed\n" {
+		t.Fatalf("expected restore to revert working copy to committed state, got %q", got)
+	}
+}
+
+func TestGitResolveRepoRejectsRelativePathNotInAllowedRoots(t *testing.T) {
+	root := t.TempDir()
+	initGitRepoAt(t, root)
+	repoDir := root
+	// Create cfg with a different allowed root
+	otherDir := t.TempDir()
+	cfg := config.Config{
+		AllowedRoots:     []string{otherDir},
+		StartupDirectory: otherDir,
+		OutputMaxBytes:   4096,
+	}
+	_, err := resolveRepo(context.Background(), cfg, map[string]any{"repo_path": repoDir})
+	if err == nil {
+		t.Fatal("expected error for repo_path outside allowed roots")
+	}
+}
+
+func TestGitAddRejectsTraversalPath(t *testing.T) {
+	repoDir := initGitRepo(t)
+	cfg := config.Config{
+		AllowedRoots:     []string{repoDir},
+		StartupDirectory: repoDir,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		GitAllowed:       map[string]bool{"add": true},
+	}
+	tool := findGitTool(t, cfg, "git.add")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"repo_path": repoDir,
+		"paths":     []any{"../outside"},
+	})
+	if err == nil {
+		t.Fatal("expected error for traversal path")
+	}
+}
+
+func TestGitLogRejectsNegativeLimit(t *testing.T) {
+	_, err := parseLogLimit(float64(-5))
+	if err == nil {
+		t.Fatal("expected error for negative limit")
+	}
+}
+
+func TestGitLogRejectsZeroLimit(t *testing.T) {
+	_, err := parseLogLimit(float64(0))
+	if err == nil {
+		t.Fatal("expected error for zero limit")
+	}
+}
+
+func TestRepoRelativePathsRejectsMixedValidAndInvalid(t *testing.T) {
+	// A mixed slice with one valid and one invalid path should fail on the invalid one.
+	_, err := repoRelativePaths([]any{"valid.go", "../outside"})
+	if err == nil {
+		t.Fatal("expected error for mixed valid/invalid paths")
+	}
+}
+
+func TestRepoRelativePathsRejectsAbsolutePathInMixedSlice(t *testing.T) {
+	_, err := repoRelativePaths([]any{"valid.go", "/etc/passwd"})
+	if err == nil {
+		t.Fatal("expected error for absolute path in mixed slice")
+	}
+}
+
+func TestGitAddRejectsPathspecMagicBang(t *testing.T) {
+	repoDir := initGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repoDir, "test.txt"), []byte("content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		AllowedRoots:     []string{repoDir},
+		StartupDirectory: repoDir,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		GitAllowed:       map[string]bool{"add": true},
+	}
+	tool := findGitTool(t, cfg, "git.add")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"repo_path": repoDir,
+		"paths":     []any{"!test.txt"},
+	})
+	if err == nil {
+		t.Fatal("expected pathspec magic ! to be rejected")
+	}
+}
+
+func TestGitDiffHappyPath(t *testing.T) {
+	repoDir := initGitRepo(t)
+	for _, args := range [][]string{
+		{"config", "user.name", "test"},
+		{"config", "user.email", "test@example.com"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v output=%s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "a.txt"), []byte("initial\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	addCmd := exec.Command("git", "add", "a.txt")
+	addCmd.Dir = repoDir
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add failed: %v output=%s", err, out)
+	}
+	commitCmd := exec.Command("git", "commit", "-m", "init")
+	commitCmd.Dir = repoDir
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit failed: %v output=%s", err, out)
+	}
+	// Modify to create an unstaged diff
+	if err := os.WriteFile(filepath.Join(repoDir, "a.txt"), []byte("modified\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Config{
+		AllowedRoots:     []string{repoDir},
+		StartupDirectory: repoDir,
+		OutputMaxBytes:   1 << 16,
+		CommandTimeout:   5 * time.Second,
+		GitAllowed:       map[string]bool{"diff": true},
+	}
+	tool := findGitTool(t, cfg, "git.diff")
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"repo_path": repoDir,
+	})
+	if err != nil {
+		t.Fatalf("git.diff failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %#v", res)
+	}
+	stdout, _ := res.StructuredContent["stdout"].(string)
+	if !strings.Contains(stdout, "modified") {
+		t.Fatalf("expected diff output to contain 'modified', got %q", stdout)
+	}
+	if !strings.Contains(stdout, "-initial") {
+		t.Fatalf("expected diff to show removal of 'initial', got %q", stdout)
+	}
+}
+
+func TestGitStatusHappyPath(t *testing.T) {
+	repoDir := initGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repoDir, "new.txt"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Config{
+		AllowedRoots:     []string{repoDir},
+		StartupDirectory: repoDir,
+		OutputMaxBytes:   1 << 16,
+		CommandTimeout:   5 * time.Second,
+		GitAllowed:       map[string]bool{"status": true},
+	}
+	tool := findGitTool(t, cfg, "git.status")
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"repo_path": repoDir,
+	})
+	if err != nil {
+		t.Fatalf("git.status failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %#v", res)
+	}
+	text := res.Content[0].Text
+	if !strings.Contains(text, "new.txt") {
+		t.Fatalf("expected status to mention new.txt, got %q", text)
+	}
 }

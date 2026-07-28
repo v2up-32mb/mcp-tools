@@ -2810,3 +2810,137 @@ func TestStatezIncludesExecPresetMetadata(t *testing.T) {
 		t.Fatalf("expected env keys in preset metadata, got %#v", goGet)
 	}
 }
+
+func decodeRPCError(t *testing.T, body []byte) (code int, message string) {
+	t.Helper()
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("failed to decode rpc response: %v body=%s", err, string(body))
+	}
+	errObj, ok := decoded["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected error object in response, got %s", string(body))
+	}
+	if c, ok := errObj["code"].(float64); ok {
+		code = int(c)
+	} else {
+		t.Fatalf("expected numeric error code, got %#v body=%s", errObj["code"], string(body))
+	}
+	if m, ok := errObj["message"].(string); ok {
+		message = m
+	}
+	return code, message
+}
+
+func TestJSONRPCErrorCodesAreCorrect(t *testing.T) {
+	t.Run("missing session returns -32003", func(t *testing.T) {
+		handler, _, _ := newTestServer(t)
+		body, _ := json.Marshal(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"method":  "tools/list",
+			"params":  map[string]any{},
+		})
+		req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer secret")
+		// NOTE: intentionally omit sessionHeader.
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		if code, _ := decodeRPCError(t, rec.Body.Bytes()); code != -32003 {
+			t.Fatalf("expected missing-session error code -32003, got %d body=%s", code, rec.Body.String())
+		}
+	})
+
+	t.Run("invalid session returns -32004", func(t *testing.T) {
+		handler, _, _ := newTestServer(t)
+		body, _ := json.Marshal(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"method":  "tools/list",
+			"params":  map[string]any{},
+		})
+		req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer secret")
+		req.Header.Set(sessionHeader, "definitely-not-a-real-session")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		if code, _ := decodeRPCError(t, rec.Body.Bytes()); code != -32004 {
+			t.Fatalf("expected invalid/expired-session error code -32004, got %d body=%s", code, rec.Body.String())
+		}
+	})
+
+	t.Run("protocol version mismatch returns -32002", func(t *testing.T) {
+		handler, _, _ := newTestServer(t)
+		sessionID := initializeSession(t, handler)
+		body, _ := json.Marshal(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"method":  "tools/list",
+			"params":  map[string]any{},
+		})
+		req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer secret")
+		req.Header.Set(sessionHeader, sessionID)
+		req.Header.Set(protocolHeader, config.ProtocolCompat)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		if code, _ := decodeRPCError(t, rec.Body.Bytes()); code != -32002 {
+			t.Fatalf("expected protocol-version-mismatch error code -32002, got %d body=%s", code, rec.Body.String())
+		}
+	})
+
+	t.Run("body too large returns -32700", func(t *testing.T) {
+		var handler http.Handler
+		handler, _, _ = newTestServer(t)
+		// Default MaxRequestBytes is 1MiB; send 2MiB.
+		oversized := bytes.Repeat([]byte("a"), 2<<20)
+		req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(oversized))
+		req.Header.Set("Authorization", "Bearer secret")
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		if code, _ := decodeRPCError(t, rec.Body.Bytes()); code != -32700 {
+			t.Fatalf("expected body-too-large parse error code -32700, got %d body=%s", code, rec.Body.String())
+		}
+	})
+}
+
+func TestSessionTTLExpiredReturnsErrorAfterPOST(t *testing.T) {
+	handler, _, _ := newTestServerWithConfig(t, func(cfg *config.Config) {
+		cfg.SessionTTL = 1 * time.Millisecond
+	})
+	sessionID := initializeSession(t, handler)
+	// Wait long enough for the session to exceed its 1ms TTL.
+	time.Sleep(10 * time.Millisecond)
+
+	body, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/list",
+		"params":  map[string]any{},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set(sessionHeader, sessionID)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 after session TTL expiry, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if code, _ := decodeRPCError(t, rec.Body.Bytes()); code != -32004 {
+		t.Fatalf("expected expired-session error code -32004, got %d body=%s", code, rec.Body.String())
+	}
+}

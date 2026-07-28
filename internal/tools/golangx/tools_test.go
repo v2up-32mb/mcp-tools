@@ -460,3 +460,166 @@ func Helper() {}
 		t.Fatalf("unexpected structured error: %#v", toolErr.StructuredContent)
 	}
 }
+
+func TestFindDefinitionRejectsNonGoFile(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "go.find_definition")
+	writeModuleFile(t, cfg.StartupDirectory, "test.txt", "hello")
+
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":   "test.txt",
+		"line":   1,
+		"column": 1,
+	})
+	if err == nil {
+		t.Fatal("expected error for non-go file")
+	}
+	if !strings.Contains(err.Error(), "must point to a .go file") {
+		t.Fatalf("expected not-go-file error, got %v", err)
+	}
+	var toolErr *mcp.ToolError
+	if !errors.As(err, &toolErr) {
+		t.Fatalf("expected ToolError, got %T", err)
+	}
+	if toolErr.StructuredContent["reason"] != "not_go_file" {
+		t.Fatalf("unexpected structured error: %#v", toolErr.StructuredContent)
+	}
+}
+
+func TestFindDefinitionRejectsColumnOutOfBounds(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "go.find_definition")
+	writeModuleFile(t, cfg.StartupDirectory, "go.mod", "module example.com/navtest\n\ngo 1.20\n")
+	writeModuleFile(t, cfg.StartupDirectory, "main.go", "package sample\n\nfunc Use() {}\n")
+
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":   "main.go",
+		"line":   1,
+		"column": 999,
+	})
+	if err == nil {
+		t.Fatal("expected column out of bounds error")
+	}
+	if !strings.Contains(err.Error(), "column out of bounds") {
+		t.Fatalf("expected column out of bounds error, got %v", err)
+	}
+	var toolErr *mcp.ToolError
+	if !errors.As(err, &toolErr) {
+		t.Fatalf("expected ToolError, got %T", err)
+	}
+	if toolErr.StructuredContent["reason"] != "position_out_of_bounds" {
+		t.Fatalf("unexpected structured error: %#v", toolErr.StructuredContent)
+	}
+}
+
+func TestFindDefinitionRejectsLineZero(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "go.find_definition")
+	writeModuleFile(t, cfg.StartupDirectory, "main.go", "package sample\n\nfunc Use() {}\n")
+
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":   "main.go",
+		"line":   0,
+		"column": 1,
+	})
+	if err == nil {
+		t.Fatal("expected line=0 to be rejected")
+	}
+	if !strings.Contains(err.Error(), "positive integer") {
+		t.Fatalf("expected positive integer error, got %v", err)
+	}
+	var toolErr *mcp.ToolError
+	if !errors.As(err, &toolErr) {
+		t.Fatalf("expected ToolError, got %T", err)
+	}
+	if toolErr.StructuredContent["reason"] != "position_out_of_bounds" {
+		t.Fatalf("unexpected structured error: %#v", toolErr.StructuredContent)
+	}
+}
+
+func TestListSymbolsReturnsEmptyForPackageOnlyFile(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "go.list_symbols")
+	writeModuleFile(t, cfg.StartupDirectory, "go.mod", "module example.com/navtest\n\ngo 1.20\n")
+	writeModuleFile(t, cfg.StartupDirectory, "empty.go", "package empty\n")
+
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "empty.go"})
+	if err != nil {
+		t.Fatalf("go.list_symbols failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %#v", res.StructuredContent)
+	}
+	symbols, ok := res.StructuredContent["symbols"].([]map[string]any)
+	if !ok {
+		t.Fatalf("expected structured symbols slice, got %#v", res.StructuredContent["symbols"])
+	}
+	if len(symbols) != 0 {
+		t.Fatalf("expected 0 symbols for package-only file, got %#v", symbols)
+	}
+	summary, _ := res.StructuredContent["summary"].(string)
+	if !strings.Contains(summary, "0 symbol") {
+		t.Fatalf("expected summary to mention 0 symbols, got %q", summary)
+	}
+}
+
+func TestListSymbolsPopulatesPositionFields(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "go.list_symbols")
+	writeModuleFile(t, cfg.StartupDirectory, "go.mod", "module example.com/navtest\n\ngo 1.20\n")
+	writeModuleFile(t, cfg.StartupDirectory, "sample.go", "package sample\n\nfunc foo() {}\n")
+
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "sample.go"})
+	if err != nil {
+		t.Fatalf("go.list_symbols failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %#v", res.StructuredContent)
+	}
+	symbols, ok := res.StructuredContent["symbols"].([]map[string]any)
+	if !ok || len(symbols) != 1 {
+		t.Fatalf("expected 1 symbol, got %#v", res.StructuredContent["symbols"])
+	}
+	startLine, _ := symbols[0]["start_line"].(int)
+	startColumn, _ := symbols[0]["start_column"].(int)
+	if startLine < 1 {
+		t.Fatalf("expected start_line >= 1, got %d", startLine)
+	}
+	if startColumn < 1 {
+		t.Fatalf("expected start_column >= 1, got %d", startColumn)
+	}
+	if symbols[0]["name"] != "foo" || symbols[0]["kind"] != "func" {
+		t.Fatalf("unexpected symbol: %#v", symbols[0])
+	}
+}
+
+func TestGolangxPathRelaxedUnderUnsafeAllowAll(t *testing.T) {
+	allowedRoot := t.TempDir()
+	externalRoot := t.TempDir()
+	writeModuleFile(t, externalRoot, "go.mod", "module example.com/external\n\ngo 1.20\n")
+	goPath := writeModuleFile(t, externalRoot, "main.go", "package external\n\nfunc Helper() {}\n")
+
+	cfg := config.Config{
+		AllowedRoots:     []string{allowedRoot},
+		StartupDirectory: externalRoot,
+		AuditLogPath:     filepath.Join(allowedRoot, "audit.jsonl"),
+		OutputMaxBytes:   1 << 16,
+		CommandTimeout:   5 * time.Second,
+		UnsafeAllowAll:   true,
+	}
+	tool := findTool(t, cfg, "go.list_symbols")
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": goPath})
+	if err != nil {
+		t.Fatalf("go.list_symbols under UnsafeAllowAll failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %#v", res.StructuredContent)
+	}
+	symbols, ok := res.StructuredContent["symbols"].([]map[string]any)
+	if !ok || len(symbols) != 1 {
+		t.Fatalf("expected 1 symbol, got %#v", res.StructuredContent["symbols"])
+	}
+	if symbols[0]["name"] != "Helper" {
+		t.Fatalf("unexpected symbol: %#v", symbols[0])
+	}
+}

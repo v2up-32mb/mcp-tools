@@ -694,3 +694,350 @@ func TestExecRunAllowsRawCommandOutsideAllowedRootsWhenUnsafeAllowAllEnabled(t *
 		t.Fatalf("unexpected env_keys: %#v", res.StructuredContent)
 	}
 }
+
+func TestRawCommandRejectsNonStringArgs(t *testing.T) {
+	allowedRoot := t.TempDir()
+	workdir := t.TempDir()
+	cfg := config.Config{
+		AllowedRoots:     []string{allowedRoot},
+		StartupDirectory: allowedRoot,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		UnsafeAllowAll:   true,
+	}
+	tool := findTool(t, cfg, "exec.run")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"command": "echo",
+		"args":    []any{123},
+		"workdir": workdir,
+	})
+	if err == nil {
+		t.Fatal("expected error for non-string raw arg")
+	}
+	if !strings.Contains(err.Error(), "args must be strings") {
+		t.Fatalf("expected error to contain \"args must be strings\", got %v", err)
+	}
+}
+
+func TestRawCommandRejectsNonStringEnvValue(t *testing.T) {
+	allowedRoot := t.TempDir()
+	workdir := t.TempDir()
+	cfg := config.Config{
+		AllowedRoots:     []string{allowedRoot},
+		StartupDirectory: allowedRoot,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		UnsafeAllowAll:   true,
+	}
+	tool := findTool(t, cfg, "exec.run")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"command": "echo",
+		"env":     map[string]any{"K": 123},
+		"workdir": workdir,
+	})
+	if err == nil {
+		t.Fatal("expected error for non-string env value")
+	}
+	if !strings.Contains(err.Error(), "env values must be strings") {
+		t.Fatalf("expected error to contain \"env values must be strings\", got %v", err)
+	}
+}
+
+func TestApplyTimeoutOverrideEqualReturnsOriginal(t *testing.T) {
+	got, err := applyTimeoutOverride(10*time.Second, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 10*time.Second {
+		t.Fatalf("expected original 10s to be returned unchanged (not shortened), got %s", got)
+	}
+}
+
+func TestRunTemplateAllowsRelativeAllowedWorkdirs(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		CommandTemplates: map[string]config.CommandTemplate{
+			"print_ok": {
+				Command:         []string{"printf", "%s", "ok"},
+				AllowedWorkdirs: []string{"sub"},
+				Timeout:         5 * time.Second,
+				ReadOnly:        true,
+			},
+		},
+	}
+	tool := findTool(t, cfg, "exec.run_template")
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"template": "print_ok",
+		"workdir":  "sub",
+	})
+	if err != nil {
+		t.Fatalf("exec.run_template relative allowed_workdirs failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %#v", res)
+	}
+	if text := strings.TrimSpace(res.Content[0].Text); text != "ok" {
+		t.Fatalf("unexpected stdout: %q", text)
+	}
+}
+
+func TestExecRunRequiresPresetWhenNoCommandOrPreset(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		UnsafeAllowAll:   true,
+	}
+	tool := findTool(t, cfg, "exec.run")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"workdir": ".",
+	})
+	if err == nil {
+		t.Fatal("expected preset required error when neither preset nor command is provided")
+	}
+	if !strings.Contains(err.Error(), "preset required") {
+		t.Fatalf("expected error to contain \"preset required\", got %v", err)
+	}
+}
+
+func TestRawCommandRejectedWhenUnsafeAllowAllDisabled(t *testing.T) {
+	root := t.TempDir()
+	workdir := t.TempDir()
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+	}
+	tool := findTool(t, cfg, "exec.run")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"command": "echo",
+		"workdir": workdir,
+	})
+	if err == nil {
+		t.Fatal("expected raw command to be rejected when unsafe_allow_all is disabled")
+	}
+	if !strings.Contains(err.Error(), "raw command not allowed") {
+		t.Fatalf("expected error to contain \"raw command not allowed\", got %v", err)
+	}
+}
+
+func TestExecRunRejectsUnknownPreset(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+	}
+	tool := findTool(t, cfg, "exec.run")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"preset":  "nonexistent_preset",
+		"workdir": ".",
+	})
+	if err == nil {
+		t.Fatal("expected unknown preset to be rejected")
+	}
+	if !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("expected error to contain \"not allowed\", got %v", err)
+	}
+}
+
+func TestExecRunRejectsEmptyCommand(t *testing.T) {
+	allowedRoot := t.TempDir()
+	workdir := t.TempDir()
+	cfg := config.Config{
+		AllowedRoots:     []string{allowedRoot},
+		StartupDirectory: allowedRoot,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		UnsafeAllowAll:   true,
+	}
+	tool := findTool(t, cfg, "exec.run")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"command": "   ",
+		"workdir": workdir,
+	})
+	if err == nil {
+		t.Fatal("expected empty command to be rejected")
+	}
+	if !strings.Contains(err.Error(), "command required") {
+		t.Fatalf("expected error to contain \"command required\", got %v", err)
+	}
+}
+
+func TestExecRunRejectsNonExistentWorkdir(t *testing.T) {
+	root := t.TempDir()
+	missing := filepath.Join(root, "does-not-exist")
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		ExecPresets: map[string]config.ExecPreset{
+			"go_test": {
+				Command:   "printf",
+				FixedArgs: []string{"%s\n"},
+				Timeout:   5 * time.Second,
+				ReadOnly:  true,
+			},
+		},
+	}
+	tool := findTool(t, cfg, "exec.run")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"preset":  "go_test",
+		"workdir": missing,
+	})
+	if err == nil {
+		t.Fatal("expected non-existent workdir to be rejected")
+	}
+	if !strings.Contains(err.Error(), "workdir") {
+		t.Fatalf("expected error to contain \"workdir\", got %v", err)
+	}
+}
+
+func TestRawCommandExecutesWithEmptyArgs(t *testing.T) {
+	allowedRoot := t.TempDir()
+	workdir := t.TempDir()
+	cfg := config.Config{
+		AllowedRoots:     []string{allowedRoot},
+		StartupDirectory: allowedRoot,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		UnsafeAllowAll:   true,
+	}
+	tool := findTool(t, cfg, "exec.run")
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"command": "true",
+		"args":    []any{},
+		"workdir": workdir,
+	})
+	if err != nil {
+		t.Fatalf("exec.run raw command with empty args failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %#v", res)
+	}
+	if res.StructuredContent["mode"] != "raw" {
+		t.Fatalf("expected raw mode in structured content, got %#v", res.StructuredContent)
+	}
+}
+
+func TestRunTemplateRejectsNonExistentTemplate(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		CommandTemplates: map[string]config.CommandTemplate{},
+	}
+	tool := findTool(t, cfg, "exec.run_template")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"template": "nonexistent_template",
+		"workdir":  ".",
+	})
+	if err == nil {
+		t.Fatal("expected non-existent template to be rejected")
+	}
+	if !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("expected error to contain \"not allowed\", got %v", err)
+	}
+}
+
+func TestExecRunRejectsWorkdirOutsideAllowedRoots(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		ExecPresets: map[string]config.ExecPreset{
+			"go_test": {
+				Command:   "printf",
+				FixedArgs: []string{"%s\n"},
+				Timeout:   5 * time.Second,
+				ReadOnly:  true,
+			},
+		},
+	}
+	tool := findTool(t, cfg, "exec.run")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"preset":  "go_test",
+		"workdir": outside,
+	})
+	if err == nil {
+		t.Fatal("expected workdir outside allowed roots to be rejected")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "workdir") {
+		t.Fatalf("expected error to contain \"workdir\", got %v", err)
+	}
+}
+
+func TestExecRunRejectsNonStringWorkdir(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		ExecPresets: map[string]config.ExecPreset{
+			"go_test": {
+				Command:   "printf",
+				FixedArgs: []string{"%s\n"},
+				Timeout:   5 * time.Second,
+				ReadOnly:  true,
+			},
+		},
+	}
+	tool := findTool(t, cfg, "exec.run")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"preset":  "go_test",
+		"workdir": 123,
+	})
+	if err == nil {
+		t.Fatal("expected non-string workdir to be rejected")
+	}
+	if !strings.Contains(err.Error(), "workdir") {
+		t.Fatalf("expected error to contain \"workdir\", got %v", err)
+	}
+}
+
+func TestExecRunRejectsMissingWorkdir(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{
+		AllowedRoots:     []string{root},
+		StartupDirectory: root,
+		OutputMaxBytes:   4096,
+		CommandTimeout:   5 * time.Second,
+		ExecPresets: map[string]config.ExecPreset{
+			"go_test": {
+				Command:   "printf",
+				FixedArgs: []string{"%s\n"},
+				Timeout:   5 * time.Second,
+				ReadOnly:  true,
+			},
+		},
+	}
+	tool := findTool(t, cfg, "exec.run")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"preset": "go_test",
+	})
+	if err == nil {
+		t.Fatal("expected missing workdir to be rejected")
+	}
+	if !strings.Contains(err.Error(), "workdir") {
+		t.Fatalf("expected error to contain \"workdir\", got %v", err)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -608,7 +609,10 @@ func TestSearchTextSupportsLongLines(t *testing.T) {
 		t.Fatalf("expected result text to contain needle, got %q", result.Content[0].Text)
 	}
 	matches, ok := result.StructuredContent["matches"].([]map[string]any)
-	if ok && len(matches) == 0 {
+	if !ok {
+		t.Fatalf("expected matches to be []map[string]any, got %T", result.StructuredContent["matches"])
+	}
+	if len(matches) == 0 {
 		t.Fatal("expected at least one match")
 	}
 }
@@ -1344,5 +1348,557 @@ func TestApplyUnifiedDiffRejectsTrailingGarbageAfterHunk(t *testing.T) {
 	}
 	if string(payload) != "old\n" {
 		t.Fatalf("file should remain unchanged, got %q", string(payload))
+	}
+}
+
+// TestReplaceTextExpectedReplacementsZeroWithExistingRejects verifies that when
+// expected_replacements=0 is set but old_text DOES exist, the tool rejects the
+// call (matches=1 != expected=0). The replaceText implementation checks
+// matches==0 first ("old_text not found"), then the mismatch guard.
+func TestReplaceTextExpectedReplacementsZeroWithExistingRejects(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.replace_text")
+	target := filepath.Join(cfg.StartupDirectory, "exists.txt")
+	if err := os.WriteFile(target, []byte("hello world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":                  "exists.txt",
+		"old_text":              "world",
+		"new_text":              "replacement",
+		"expected_replacements": 0,
+	})
+	if err == nil {
+		t.Fatal("expected error when old_text exists but expected_replacements=0")
+	}
+	if !strings.Contains(err.Error(), "expected_replacements mismatch") {
+		t.Fatalf("expected mismatch error, got %v", err)
+	}
+	// file must remain unchanged on precondition failure
+	got, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != "hello world" {
+		t.Fatalf("file should remain unchanged, got %q", string(got))
+	}
+}
+
+// TestReplaceTextExpectedReplacementsZeroWithMissingReportsNotFound verifies
+// the implementation's actual ordering: matches==0 is caught first and reports
+// "old_text not found" BEFORE the expected_replacements==0 guard can accept it.
+// Callers cannot use expected_replacements=0 as a "success when absent" assertion
+// under the current implementation; this test pins that behavior so any future
+// reorder is a deliberate, visible change.
+func TestReplaceTextExpectedReplacementsZeroWithMissingReportsNotFound(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.replace_text")
+	target := filepath.Join(cfg.StartupDirectory, "missing.txt")
+	if err := os.WriteFile(target, []byte("hello world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":                  "missing.txt",
+		"old_text":              "nonexistent",
+		"new_text":              "replacement",
+		"expected_replacements": 0,
+	})
+	if err == nil {
+		t.Fatal("expected error: matches==0 short-circuits to old_text not found before the expected=0 guard")
+	}
+	if !strings.Contains(err.Error(), "old_text not found") {
+		t.Fatalf("expected old_text not found error, got %v", err)
+	}
+	got, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != "hello world" {
+		t.Fatalf("file should remain unchanged, got %q", string(got))
+	}
+}
+
+// TestEditLinesEmptyNewTextDeletesRange deletes a middle range and verifies the
+// surrounding lines collapse together.
+func TestEditLinesEmptyNewTextDeletesRange(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.edit_lines")
+	target := filepath.Join(cfg.StartupDirectory, "delete-range.txt")
+	if err := os.WriteFile(target, []byte("L1\nL2\nL3\nL4\nL5\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":       "delete-range.txt",
+		"start_line": 2,
+		"end_line":   3,
+		"new_text":   "",
+	})
+	if err != nil {
+		t.Fatalf("edit_lines delete failed: %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "L1\nL4\nL5\n"
+	if string(got) != want {
+		t.Fatalf("unexpected file contents\nwant: %q\ngot:  %q", want, string(got))
+	}
+}
+
+// TestEditLinesNewTextSingleNewlineInsertsBlankLine replaces one line with a
+// single blank line (new_text == "\n").
+func TestEditLinesNewTextSingleNewlineInsertsBlankLine(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.edit_lines")
+	target := filepath.Join(cfg.StartupDirectory, "blank-line.txt")
+	if err := os.WriteFile(target, []byte("a\nb\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":       "blank-line.txt",
+		"start_line": 1,
+		"end_line":   1,
+		"new_text":   "\n",
+	})
+	if err != nil {
+		t.Fatalf("edit_lines blank insert failed: %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "\nb\n"
+	if string(got) != want {
+		t.Fatalf("unexpected file contents\nwant: %q\ngot:  %q", want, string(got))
+	}
+}
+
+// TestEditLinesStartBeyondFileLengthRejected verifies out-of-bounds rejection
+// when start > number of lines.
+func TestEditLinesStartBeyondFileLengthRejected(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.edit_lines")
+	target := filepath.Join(cfg.StartupDirectory, "oob.txt")
+	if err := os.WriteFile(target, []byte("only\nsecond\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":       "oob.txt",
+		"start_line": 3,
+		"end_line":   3,
+		"new_text":   "x\n",
+	})
+	if err == nil {
+		t.Fatal("expected out-of-bounds error when start > len(lines)")
+	}
+	if !strings.Contains(err.Error(), "out of bounds") {
+		t.Fatalf("expected out of bounds error, got %v", err)
+	}
+	got, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != "only\nsecond\n" {
+		t.Fatalf("file should remain unchanged, got %q", string(got))
+	}
+}
+
+// TestEditLinesNegativeContextLinesRejected verifies context_lines < 0 fails.
+func TestEditLinesNegativeContextLinesRejected(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.edit_lines")
+	target := filepath.Join(cfg.StartupDirectory, "neg-ctx.txt")
+	if err := os.WriteFile(target, []byte("a\nb\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":          "neg-ctx.txt",
+		"start_line":    1,
+		"end_line":      1,
+		"new_text":      "A\n",
+		"context_lines": -1,
+	})
+	if err == nil {
+		t.Fatal("expected error for negative context_lines")
+	}
+	if !strings.Contains(err.Error(), "context_lines must be >= 0") {
+		t.Fatalf("expected context_lines >= 0 error, got %v", err)
+	}
+}
+
+// TestEditLinesContextLinesCapsAtTwenty verifies context_lines > 20 is capped to
+// 20 by counting the lines in the returned context_snippet. With a 1-line
+// replacement at the start of a small file, the snippet covers the whole file,
+// so we instead place the edit in the middle of a 50-line file so that 20-line
+// context windows on each side stop short of the file ends.
+func TestEditLinesContextLinesCapsAtTwenty(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.edit_lines")
+	target := filepath.Join(cfg.StartupDirectory, "ctx-cap.txt")
+	var buf bytes.Buffer
+	for i := 1; i <= 50; i++ {
+		fmt.Fprintf(&buf, "line%02d\n", i)
+	}
+	if err := os.WriteFile(target, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":          "ctx-cap.txt",
+		"start_line":    25,
+		"end_line":      25,
+		"new_text":      "EDIT\n",
+		"context_lines": 999,
+	})
+	if err != nil {
+		t.Fatalf("edit_lines failed: %v", err)
+	}
+	snippet, ok := res.StructuredContent["context_snippet"].(string)
+	if !ok {
+		t.Fatalf("expected string context_snippet, got %#v", res.StructuredContent["context_snippet"])
+	}
+	// context window: 20 lines before + the 1 edited line + 20 lines after = 41
+	gotLines := strings.Count(snippet, "\n") + 1
+	if gotLines != 41 {
+		t.Fatalf("expected context_snippet capped at 20+1+20=41 lines, got %d", gotLines)
+	}
+}
+
+// TestDeletePathFailsOnNonEmptyDirectory verifies os.Remove semantics: a
+// non-empty directory cannot be deleted.
+func TestDeletePathFailsOnNonEmptyDirectory(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.delete_path")
+	dir := filepath.Join(cfg.StartupDirectory, "nonempty")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "child.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path": "nonempty",
+	})
+	if err == nil {
+		t.Fatal("expected error when deleting non-empty directory")
+	}
+	if _, statErr := os.Stat(dir); statErr != nil {
+		t.Fatalf("non-empty directory should still exist after failed delete: %v", statErr)
+	}
+}
+
+// TestSearchTextLimitZeroFallsBackToDefault verifies limit=0 silently uses the
+// default of 200 (v <= 0 branch). A file with 5 matching lines all under 200
+// should return all 5.
+func TestSearchTextLimitZeroFallsBackToDefault(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.search_text")
+	target := filepath.Join(cfg.StartupDirectory, "limit-zero.txt")
+	if err := os.WriteFile(target, []byte("needle one\nneedle two\nneedle three\nnot here\nneedle four\nneedle five\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":  "limit-zero.txt",
+		"query": "needle",
+		"limit": 0,
+	})
+	if err != nil {
+		t.Fatalf("search_text with limit=0 failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %#v", res)
+	}
+	matches, ok := res.StructuredContent["matches"].([]map[string]any)
+	if !ok {
+		t.Fatalf("expected structured matches, got %#v", res.StructuredContent["matches"])
+	}
+	if len(matches) != 5 {
+		t.Fatalf("expected all 5 matches with limit=0 (default 200), got %d", len(matches))
+	}
+}
+
+func TestWriteFileCreatesParentDirectories(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.write_file")
+	relPath := filepath.Join("subdir", "deep", "file.txt")
+
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path": relPath,
+		"text": "content\n",
+	})
+	if err != nil {
+		t.Fatalf("write_file should create parent dirs: %v", err)
+	}
+
+	absPath := filepath.Join(cfg.StartupDirectory, relPath)
+	got, err := os.ReadFile(absPath)
+	if err != nil {
+		t.Fatalf("expected file to exist: %v", err)
+	}
+	if string(got) != "content\n" {
+		t.Fatalf("unexpected content: %q", got)
+	}
+}
+
+func TestMakeDirIsIdempotent(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.make_dir")
+	relDir := filepath.Join("a", "b", "c")
+
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": relDir})
+	if err != nil {
+		t.Fatalf("first make_dir failed: %v", err)
+	}
+
+	// Call again on the same existing directory — should not error.
+	_, err = tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": relDir})
+	if err != nil {
+		t.Fatalf("second make_dir on existing dir should be idempotent: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(cfg.StartupDirectory, relDir))
+	if err != nil || !info.IsDir() {
+		t.Fatalf("expected directory to exist: err=%v isDir=%v", err, info.IsDir())
+	}
+}
+
+func TestMovePathToExistingDestinationOverwrites(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.move_path")
+	src := filepath.Join(cfg.StartupDirectory, "src.txt")
+	dst := filepath.Join(cfg.StartupDirectory, "dst.txt")
+	if err := os.WriteFile(src, []byte("from-src\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, []byte("original\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"src": "src.txt",
+		"dst": "dst.txt",
+	})
+	if err != nil {
+		t.Fatalf("move_path to existing dst failed: %v", err)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("dst should exist: %v", err)
+	}
+	if string(got) != "from-src\n" {
+		t.Fatalf("expected overwritten content, got %q", got)
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Fatalf("src should no longer exist, err=%v", err)
+	}
+}
+
+func TestReadFileRejectsNonExistentFile(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.read_file")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path": "nonexistent.txt",
+	})
+	if err == nil {
+		t.Fatal("expected error for non-existent file")
+	}
+	if !strings.Contains(err.Error(), "no such file") {
+		t.Fatalf("expected 'no such file' error, got %v", err)
+	}
+}
+
+func TestStatPathRejectsNonExistentFile(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.stat_path")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path": "nonexistent.txt",
+	})
+	if err == nil {
+		t.Fatal("expected error for non-existent file")
+	}
+}
+
+func TestSearchTextRejectsNonExistentDirectory(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.search_text")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":  "nonexistent_dir",
+		"query": "test",
+	})
+	if err == nil {
+		t.Fatal("expected error for non-existent directory")
+	}
+}
+
+func TestSearchTextLimitAbove1000CappedTo1000(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.search_text")
+	// Create a file with 5 matches.
+	path := filepath.Join(cfg.StartupDirectory, "file.txt")
+	content := strings.Repeat("hello\n", 5)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":  "file.txt",
+		"query": "hello",
+		"limit": 5000,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	matches, _ := res.StructuredContent["matches"].([]map[string]any)
+	if len(matches) != 5 {
+		t.Fatalf("expected 5 matches, got %d", len(matches))
+	}
+}
+
+func TestReplaceTextExpectedReplacementsExactMatchSucceeds(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.replace_text")
+	path := filepath.Join(cfg.StartupDirectory, "file.txt")
+	if err := os.WriteFile(path, []byte("foo bar foo baz\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path":                  "file.txt",
+		"old_text":              "foo",
+		"new_text":              "qux",
+		"expected_replacements": 2,
+		"replace_all":           true,
+	})
+	if err != nil {
+		t.Fatalf("replace_text with exact expected_replacements failed: %v", err)
+	}
+	if got, _ := res.StructuredContent["replaced_occurrences"].(int); got != 2 {
+		t.Fatalf("expected 2 replacements, got %d", got)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "qux bar qux baz\n" {
+		t.Fatalf("unexpected content: %q", got)
+	}
+}
+
+func TestMakeDirRejectsNonStringPath(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.make_dir")
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path": 123,
+	})
+	if err == nil {
+		t.Fatal("expected error for non-string path")
+	}
+}
+
+func TestListDirReturnsEntries(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.list_dir")
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(cfg.StartupDirectory, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "."})
+	if err != nil {
+		t.Fatalf("list_dir failed: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %#v", res)
+	}
+	text := res.Content[0].Text
+	if !strings.Contains(text, "a.txt") || !strings.Contains(text, "b.txt") {
+		t.Fatalf("expected listing to contain a.txt and b.txt, got %q", text)
+	}
+}
+
+func TestStatPathReturnsDirectoryMetadata(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.stat_path")
+	subDir := filepath.Join(cfg.StartupDirectory, "subdir")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "subdir"})
+	if err != nil {
+		t.Fatalf("stat_path failed: %v", err)
+	}
+	isDir, _ := res.StructuredContent["is_dir"].(bool)
+	if !isDir {
+		t.Fatalf("expected is_dir=true, got %#v", res.StructuredContent)
+	}
+}
+
+func TestReadFileRejectsPathOutsideAllowedRootsWhenUnsafeDisabled(t *testing.T) {
+	cfg := newTestConfig(t)
+	// UnsafeAllowAll is false by default in newTestConfig
+	tool := findTool(t, cfg, "fs.read_file")
+	outside := t.TempDir()
+	target := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(target, []byte("secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path": target,
+	})
+	if err == nil {
+		t.Fatal("expected error when reading outside allowed roots with UnsafeAllowAll=false")
+	}
+}
+
+func TestWriteFileOverwritesExistingFile(t *testing.T) {
+	cfg := newTestConfig(t)
+	tool := findTool(t, cfg, "fs.write_file")
+	path := filepath.Join(cfg.StartupDirectory, "file.txt")
+	if err := os.WriteFile(path, []byte("original\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
+		"path": "file.txt",
+		"text": "overwritten\n",
+	})
+	if err != nil {
+		t.Fatalf("write_file overwrite failed: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "overwritten\n" {
+		t.Fatalf("expected overwritten content, got %q", got)
+	}
+}
+
+func TestReadOnlyFlagMatchesToolSemantics(t *testing.T) {
+	cfg := newTestConfig(t)
+	readOnlyTools := map[string]bool{
+		"fs.read_file":   true,
+		"fs.list_dir":    true,
+		"fs.stat_path":   true,
+		"fs.search_text": true,
+	}
+	writeTools := map[string]bool{
+		"fs.write_file":         false,
+		"fs.make_dir":           false,
+		"fs.move_path":          false,
+		"fs.delete_path":        false,
+		"fs.replace_text":       false,
+		"fs.edit_lines":         false,
+		"fs.apply_unified_diff": false,
+	}
+	for _, tool := range NewTools(cfg) {
+		name := tool.Name()
+		if want, ok := readOnlyTools[name]; ok {
+			if tool.ReadOnly() != want {
+				t.Fatalf("%s ReadOnly() should be %v, got %v", name, want, tool.ReadOnly())
+			}
+		}
+		if want, ok := writeTools[name]; ok {
+			if tool.ReadOnly() != want {
+				t.Fatalf("%s ReadOnly() should be %v, got %v", name, want, tool.ReadOnly())
+			}
+		}
 	}
 }
