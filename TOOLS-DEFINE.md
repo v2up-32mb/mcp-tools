@@ -535,6 +535,80 @@
 
 ---
 
+## 3.12 `fs.pull_file`
+
+### 作用
+把服务器工作区内的文件**以短时效下载 URL 的形式**拉回客户端。
+
+典型场景：客户端需要查看服务器上的任务进度图片（如 `progress.png`），
+先调用 `fs.pull_file` 拿到 URL，再 `curl -o` 下载到本地交给 LLM 识别。
+
+### 定位
+本工具**不返回文件内容**，只签发下载 URL：
+
+- 通过 `GET /file/<token>` 下载，URL 本身是唯一授权凭据（无二级凭证）
+- 相对路径 URL（`/file/<token>`）由客户端用自身请求 MCP 的 base URL 解析；
+  配置 `pull_file.url.public_base_url` 后返回绝对 URL
+- 与 `fs.read_file` 的关系：read_file 返回 UTF-8 文本内容；pull_file 面向
+  二进制/大文件/图片，走 HTTP 流式下载，不经过 JSON-RPC 响应体
+
+### 输入参数
+- `path`（必填，`minLength: 1`）：复用 `resolvePathArg`，强制 allowed roots
+- `max_bytes`（可选，`minimum: 1`）：本次调用的进一步收紧上限；不能超过配置
+  `pull_file.max_bytes`，二者取较小值（无放宽能力）
+
+### 配置项
+```yaml
+pull_file:
+  enabled: true              # 总开关，默认 true
+  allowed_extensions: []     # 空 = 不限制；如 [".png",".jpg",".bmp"]；大小写不敏感
+  max_bytes: 10485760        # 单文件上限，默认 10 MiB
+  url:
+    ttl_sec: 300             # URL 有效期，默认 300 秒
+    max_downloads: 0         # 0 = 不限制次数；>0 = 次数上限
+    public_base_url: ""      # 选填，反代/公网部署时返回绝对 URL
+```
+
+### 关键步骤（签发）
+1. 解析 `path`（allowed roots / unsafe 语义与现有 fs 工具一致）
+2. 校验 `pull_file.enabled`
+3. 校验文件存在、非目录、不超过 `min(调用方 max_bytes, 配置 max_bytes)`
+4. 校验扩展名白名单（空 = 放行）
+5. 用进程内随机密钥对 `version || exp || nonce || path` 做 HMAC-SHA256 签名
+6. 记录内存表 `{remaining: max_downloads, exp}`，返回 URL + 元数据
+
+### 关键步骤（下载端点 `GET /file/<token>`）
+1. 校验：版本 / HMAC 签名 / 未过期 / 次数未用尽
+2. 重新走 allowed roots 校验（TOCTOU 防护）
+3. `Stat` 确认文件仍存在、非目录、仍在白名单与大小上限内
+4. 按扩展名设置 `Content-Type`（兜底 `application/octet-stream`）
+5. `Content-Disposition: inline; filename="<basename>"`
+6. `http.ServeContent` 流式发送（自动支持 Range / HEAD）
+
+### 返回结构
+```json
+{
+  "summary": "issued pull link",
+  "path": "/abs/progress.png",
+  "filename": "progress.png",
+  "bytes": 12345,
+  "mime_type": "image/png",
+  "url": "/file/<token>",
+  "url_kind": "relative",
+  "host_hint": "127.0.0.1:8080",
+  "expires_in_sec": 300,
+  "max_downloads": 0
+}
+```
+- `url_kind=absolute` 当且仅当配置了 `public_base_url`
+- `host_hint` 来自请求 `Host` 头，仅作参考，不作为 URL 解析依据
+
+### 副作用
+- 只读：不写服务端磁盘、不发资源更新通知
+- 每次下载写入独立审计事件 `fs.pull_file.download`（含 remote_addr、path、
+  成功/失败、耗时、`served N bytes` 摘要），不记录文件内容
+- token 内嵌文件路径且签名绑定；持有 URL 即具备该文件的可下载权限
+
 ## 4. `git.*` 工具定义
 
 ## 4.1 总体约束

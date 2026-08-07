@@ -29,6 +29,7 @@ type Tool interface {
 
 type CallContext struct {
 	RemoteAddr      string
+	Host            string
 	RequestID       string
 	SessionID       string
 	ProtocolVersion string

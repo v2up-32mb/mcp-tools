@@ -849,3 +849,135 @@ func TestLoadDefaultExecPresetsIncludeManagedGoCacheEnv(t *testing.T) {
 		t.Fatalf("unexpected GOTMPDIR: %q", got)
 	}
 }
+
+func TestLoadPullFileDefaultsAndOverrides(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "pull.yaml")
+	content := `bearer_token: t
+pull_file:
+  allowed_extensions: [".PNG", ".JPG"]
+  max_bytes: 2048
+  url:
+    ttl_sec: 120
+    max_downloads: 3
+    public_base_url: "https://files.example.com/mcp-tools/"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err != nil {
+		t.Fatalf("LoadWithOptions error: %v", err)
+	}
+	if !cfg.PullFile.Enabled {
+		t.Fatal("pull_file should default to enabled")
+	}
+	if cfg.PullFile.MaxBytes != 2048 {
+		t.Fatalf("max_bytes=%d", cfg.PullFile.MaxBytes)
+	}
+	if cfg.PullFile.TTLSeconds != 120 {
+		t.Fatalf("ttl_sec=%d", cfg.PullFile.TTLSeconds)
+	}
+	if cfg.PullFile.MaxDownloads != 3 {
+		t.Fatalf("max_downloads=%d", cfg.PullFile.MaxDownloads)
+	}
+	if cfg.PullFile.PublicBaseURL != "https://files.example.com/mcp-tools" {
+		t.Fatalf("public_base_url=%q", cfg.PullFile.PublicBaseURL)
+	}
+	// Extensions are lowercased.
+	if len(cfg.PullFile.AllowedExtensions) != 2 || cfg.PullFile.AllowedExtensions[0] != ".png" || cfg.PullFile.AllowedExtensions[1] != ".jpg" {
+		t.Fatalf("allowed_extensions=%#v", cfg.PullFile.AllowedExtensions)
+	}
+}
+
+func TestLoadPullFileDefaultsWhenAbsent(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "basic.yaml")
+	if err := os.WriteFile(configPath, []byte("bearer_token: t\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err != nil {
+		t.Fatalf("LoadWithOptions error: %v", err)
+	}
+	if !cfg.PullFile.Enabled || cfg.PullFile.MaxBytes != 10*1024*1024 || cfg.PullFile.TTLSeconds != 300 || cfg.PullFile.MaxDownloads != 0 || cfg.PullFile.PublicBaseURL != "" {
+		t.Fatalf("unexpected pull_file defaults: %+v", cfg.PullFile)
+	}
+	if len(cfg.PullFile.AllowedExtensions) != 0 {
+		t.Fatalf("expected empty allowed_extensions by default, got %#v", cfg.PullFile.AllowedExtensions)
+	}
+}
+
+func TestLoadRejectsInvalidPullFileExtension(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"no-dot.yaml":      "bearer_token: t\npull_file:\n  allowed_extensions: [png]\n",
+		"slash.yaml":       "bearer_token: t\npull_file:\n  allowed_extensions: [\".a/b\"]\n",
+		"empty.yaml":       "bearer_token: t\npull_file:\n  allowed_extensions: [\"\"]\n",
+		"inner-space.yaml": "bearer_token: t\npull_file:\n  allowed_extensions: [\".p ng\"]\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			configPath := filepath.Join(root, name)
+			if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root}); err == nil {
+				t.Fatal("expected invalid allowed_extensions to fail")
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidPullFileNumbers(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"max-bytes-zero.yaml":         "bearer_token: t\npull_file:\n  max_bytes: 0\n",
+		"ttl-zero.yaml":               "bearer_token: t\npull_file:\n  url:\n    ttl_sec: 0\n",
+		"max-downloads-negative.yaml": "bearer_token: t\npull_file:\n  url:\n    max_downloads: -1\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			configPath := filepath.Join(root, name)
+			if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root}); err == nil {
+				t.Fatal("expected invalid pull_file number to fail")
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidPullFilePublicBaseURL(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"not-url.yaml": "bearer_token: t\npull_file:\n  url:\n    public_base_url: \"files.example.com\"\n",
+		"query.yaml":   "bearer_token: t\npull_file:\n  url:\n    public_base_url: \"https://files.example.com?x=1\"\n",
+		"ftp.yaml":     "bearer_token: t\npull_file:\n  url:\n    public_base_url: \"ftp://files.example.com\"\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			configPath := filepath.Join(root, name)
+			if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root}); err == nil {
+				t.Fatal("expected invalid public_base_url to fail")
+			}
+		})
+	}
+}
+
+func TestLoadPullFileExtensionTrimsWhitespace(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "trim.yaml")
+	content := "bearer_token: t\npull_file:\n  allowed_extensions: [\" .png \"]\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
+	if err != nil {
+		t.Fatalf("LoadWithOptions error: %v", err)
+	}
+	if len(cfg.PullFile.AllowedExtensions) != 1 || cfg.PullFile.AllowedExtensions[0] != ".png" {
+		t.Fatalf("expected trimmed .png, got %#v", cfg.PullFile.AllowedExtensions)
+	}
+}

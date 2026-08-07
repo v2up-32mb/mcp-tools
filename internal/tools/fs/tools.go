@@ -16,7 +16,9 @@ import (
 	"github.com/example/mcp-tools/internal/config"
 	"github.com/example/mcp-tools/internal/mcp"
 	"github.com/example/mcp-tools/internal/numconv"
+	"github.com/example/mcp-tools/internal/pullfile"
 	"github.com/example/mcp-tools/internal/security"
+	"time"
 )
 
 type tool struct {
@@ -35,7 +37,11 @@ func (t tool) Call(ctx context.Context, callCtx mcp.CallContext, args map[string
 	return t.call(ctx, callCtx, args)
 }
 
-func NewTools(cfg config.Config) []mcp.Tool {
+func NewTools(cfg config.Config, pull ...*pullfile.Manager) []mcp.Tool {
+	mgr := pullfile.NewManager(cfg, nil)
+	if len(pull) > 0 && pull[0] != nil {
+		mgr = pull[0]
+	}
 	return []mcp.Tool{
 		tool{name: "fs.read_file", desc: "Read a UTF-8 text file from path. path may be relative to the startup directory and must resolve inside allowed roots.", schema: schemaPath(), readOnly: true, call: readFile(cfg)},
 		tool{name: "fs.write_file", desc: "Atomically replace or create a UTF-8 text file. path may be relative to the startup directory; parent directories are created if needed.", schema: schemaPathWithText(), call: writeFile(cfg)},
@@ -48,6 +54,7 @@ func NewTools(cfg config.Config) []mcp.Tool {
 		tool{name: "fs.replace_text", desc: "Replace exact old_text with new_text in one file. Supports replace-first or replace-all and can assert expected_replacements before writing.", schema: schemaReplaceText(), call: replaceText(cfg)},
 		tool{name: "fs.apply_unified_diff", desc: "Apply a standard unified diff to exactly one file using strict matching. path is passed separately, the diff header must match it, multiple hunks are allowed, dry_run validates without writing, and any hunk mismatch fails the whole patch with structured conflict details.", schema: schemaApplyUnifiedDiff(), call: applyUnifiedDiff(cfg)},
 		tool{name: "fs.edit_lines", desc: "Strictly replace a 1-based line range. new_text is interpreted as logical lines; blank lines are preserved, empty string deletes the range, and \"\n\" inserts one blank line. expected_old_text can be used as an optimistic concurrency check.", schema: schemaEditLines(), call: editLines(cfg)},
+		tool{name: "fs.pull_file", desc: "Issue a short-lived signed download URL for a file inside allowed roots. The client downloads the file with GET on the returned url; the url is relative to the client's MCP base URL unless pull_file.url.public_base_url is configured. Type and size limits come from the pull_file config.", schema: schemaPullFile(), readOnly: true, call: pullFile(cfg, mgr)},
 	}
 }
 
@@ -397,6 +404,64 @@ func editLines(cfg config.Config) func(context.Context, mcp.CallContext, map[str
 			"new_text":        newText,
 			"context_snippet": snippet,
 		}, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: summary}), nil
+	}
+}
+
+func pullFile(cfg config.Config, mgr *pullfile.Manager) func(context.Context, mcp.CallContext, map[string]any) (mcp.Result, error) {
+	return func(_ context.Context, callCtx mcp.CallContext, args map[string]any) (mcp.Result, error) {
+		if !cfg.PullFile.Enabled {
+			return mcp.Result{}, mcp.WrapToolError(pullfile.ErrDisabled, mcp.AuditData{Allowed: true, ResultDigest: "pull_file disabled"})
+		}
+		path, err := resolvePathArg(args, "path", cfg)
+		if err != nil {
+			return mcp.Result{}, err
+		}
+		maxBytes := cfg.PullFile.MaxBytes
+		if raw, ok := args["max_bytes"]; ok && raw != nil {
+			parsed, err := parseInteger(raw, "max_bytes")
+			if err != nil {
+				return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+			}
+			if parsed <= 0 {
+				return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("max_bytes must be positive"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+			}
+			if int64(parsed) < maxBytes {
+				maxBytes = int64(parsed)
+			}
+		}
+		dl, err := mgr.Issue(path, maxBytes, time.Now())
+		if err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "pull link rejected"})
+		}
+		summary := "issued pull link"
+		url, urlKind := "/file/"+dl.Token, "relative"
+		if cfg.PullFile.PublicBaseURL != "" {
+			url, urlKind = cfg.PullFile.PublicBaseURL+"/file/"+dl.Token, "absolute"
+		}
+		return mcp.TextResult(summary, map[string]any{
+			"summary":        summary,
+			"path":           dl.Path,
+			"filename":       dl.Filename,
+			"bytes":          dl.Bytes,
+			"mime_type":      dl.MIMEType,
+			"url":            url,
+			"url_kind":       urlKind,
+			"host_hint":      callCtx.Host,
+			"expires_in_sec": cfg.PullFile.TTLSeconds,
+			"max_downloads":  cfg.PullFile.MaxDownloads,
+		}, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: summary}), nil
+	}
+}
+
+func schemaPullFile() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"path":      nonEmptyStringSchema(),
+			"max_bytes": map[string]any{"type": "integer", "minimum": 1},
+		},
+		"required": []string{"path"},
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/example/mcp-tools/internal/config"
 	"github.com/example/mcp-tools/internal/httpapi"
 	"github.com/example/mcp-tools/internal/mcp"
+	"github.com/example/mcp-tools/internal/pullfile"
 	execx "github.com/example/mcp-tools/internal/tools/execx"
 	fstools "github.com/example/mcp-tools/internal/tools/fs"
 	gittools "github.com/example/mcp-tools/internal/tools/git"
@@ -54,8 +55,10 @@ func run() error {
 	}
 	defer auditor.Close()
 
+	pullMgr := pullfile.NewManager(cfg, auditor)
+
 	registry := mcp.NewRegistry(auditor)
-	for _, t := range fstools.NewTools(cfg) {
+	for _, t := range fstools.NewTools(cfg, pullMgr) {
 		registry.Register(t)
 	}
 	for _, t := range gittools.NewTools(cfg) {
@@ -70,7 +73,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           httpapi.NewServer(cfg, registry),
+		Handler:           httpapi.NewServer(cfg, registry, pullMgr),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 		ReadTimeout:       cfg.ReadTimeout,
 		// WriteTimeout is 0 because SSE long-poll connections may stay open
@@ -132,6 +135,12 @@ func printConfigSummary(cfg config.Config) error {
 		"git_allowed":                         sortedTrueKeys(cfg.GitAllowed),
 		"exec_presets":                        sortedPresetNames(cfg.ExecPresets),
 		"command_templates":                   sortedTemplateNames(cfg.CommandTemplates),
+		"pull_file_enabled":                   cfg.PullFile.Enabled,
+		"pull_file_allowed_extensions":        cfg.PullFile.AllowedExtensions,
+		"pull_file_max_bytes":                 cfg.PullFile.MaxBytes,
+		"pull_file_ttl_sec":                   cfg.PullFile.TTLSeconds,
+		"pull_file_max_downloads":             cfg.PullFile.MaxDownloads,
+		"pull_file_public_base_url":           cfg.PullFile.PublicBaseURL,
 		"bearer_token_present":                cfg.BearerToken != "",
 	}
 	encoded, err := json.MarshalIndent(summary, "", "  ")

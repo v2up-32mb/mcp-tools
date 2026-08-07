@@ -61,6 +61,7 @@ unsafe_allow_all: true
   - `fs.replace_text`
   - `fs.apply_unified_diff`
   - `fs.edit_lines`
+  - `fs.pull_file`（签发短时效下载 URL，客户端自行下载保存）
 - **Git 工具**
   - `git.status`
   - `git.diff`
@@ -79,6 +80,7 @@ unsafe_allow_all: true
   - `exec.run_template`
 - 仅开放 Go preset：`go_fmt` / `go_mod_download` / `go_test` / `go_generate` / `go_build` / `go_vet` / `go_mod_tidy` / `go_get` / `go_list` / `go_work_sync`
 - 同时支持固定白名单命令模板：`make_test` / `make_build` / `go_clean_testcache`（默认要求 `confirm=true`）
+- 文件拉取：`fs.pull_file` 签发 HMAC 签名、短时效、可限次的下载 URL，客户端通过 `GET /file/<token>` 流式下载；支持扩展名白名单与大小上限
 - 审计日志：JSON Lines
 - 目录边界：启动目录 + `allowed_roots`
 - 浏览器 Origin 拒绝：未配置 `allowed_origins` / `MCP_ALLOWED_ORIGINS` 时默认不接受浏览器来源请求
@@ -316,6 +318,12 @@ allowed_origins:
 - `git.allowed_subcommands`
 - `exec.presets`
 - `exec.command_templates`
+- `pull_file.enabled`
+- `pull_file.allowed_extensions`
+- `pull_file.max_bytes`
+- `pull_file.url.ttl_sec`
+- `pull_file.url.max_downloads`
+- `pull_file.url.public_base_url`
 
 说明：
 
@@ -345,6 +353,11 @@ allowed_origins:
 - `exec.command_templates.<name>.category` 可声明模板类别（如 build/test/cleanup）
 - `exec.command_templates.<name>.destructive` 可标识模板是否具有破坏性副作用
 - `exec.command_templates.<name>.requires_confirmation` 会要求调用方显式传 `confirm=true` 才执行
+- `pull_file.enabled` 默认 `true`；设为 `false` 后 `fs.pull_file` 直接报错且 `/file/*` 返回 404
+- `pull_file.allowed_extensions` 空列表 = 不限制类型；条目必须以 `.` 开头、大小写不敏感（如 `.png`、`.JPG`），列表项不能为空
+- `pull_file.max_bytes` 默认 10 MiB；调用方 `max_bytes` 参数只能进一步收紧，不能放宽
+- `pull_file.url.ttl_sec` 默认 300 秒；`pull_file.url.max_downloads` 默认 0 = 不限制次数（仅受 TTL 约束），大于 0 时与 TTL 双条件、先到先失效
+- `pull_file.url.public_base_url` 留空时工具返回相对路径 `/file/<token>`，由客户端用自身 MCP base URL 拼接；反代/公网部署时配置绝对 `http(s)` 地址（不能带 query/fragment）即可拿到绝对 URL
 
 ## 启动
 
@@ -995,7 +1008,33 @@ curl -s http://127.0.0.1:8080/mcp   -H 'Authorization: Bearer change-me'   -H "M
   }'
 ```
 
-### 13. Go 导航工具
+#### 12.5 fs.pull_file（拉取服务器文件到客户端）
+
+```bash
+# 1. 客户端调用 fs.pull_file（JSON 模式）
+curl -sS -X POST http://127.0.0.1:8080/mcp \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -H "Mcp-Session-Id: <session-id>" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fs.pull_file","arguments":{"path":"progress.png"}}}'
+# => {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"issued pull link"}],
+#     "structuredContent":{"url":"/file/<token>","url_kind":"relative","filename":"progress.png",
+#     "bytes":12345,"mime_type":"image/png","expires_in_sec":300,"max_downloads":0}, ...}}
+
+# 2. 客户端用自己请求 MCP 的 base URL 拼接，下载到本地
+curl -o ./progress.png "http://127.0.0.1:8080/file/<token>"
+
+# 3. 配置了 public_base_url 时，直接使用返回的绝对 URL
+curl -o ./progress.png "https://files.example.com/mcp-tools/file/<token>"
+```
+
+说明：
+
+- 下载 URL 是唯一授权凭据：**持有 URL 即有权下载**，请勿转发；有效期与次数由 `pull_file.url.*` 控制
+- 服务重启后所有已签发 URL 立即失效
+- 每次下载都会写入一条 `fs.pull_file.download` 审计事件
+
+## 13. Go 导航工具
 
 这两个工具用于补齐 coding agent 的 **outline + definition** 工作流：
 

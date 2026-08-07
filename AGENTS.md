@@ -195,6 +195,7 @@ data: {jsonrpc response or notification}
 - `fs.replace_text`
 - `fs.apply_unified_diff`
 - `fs.edit_lines`
+- `fs.pull_file`
 
 ### 5.2 Git 工具
 
@@ -392,6 +393,19 @@ data: {jsonrpc response or notification}
 
 ---
 
+## 6.7 文件拉取下载 URL（`fs.pull_file` / `GET /file/<token>`）
+
+`fs.pull_file` 是只读工具：签发一个**短时效、可限次、签名绑定文件路径**的下载 URL，客户端自行 `GET /file/<token>` 下载。这是"持有 URL 即授权"的凭据模型，与 Bearer Token 鉴权是两套体系：
+
+- token 内嵌文件路径 + HMAC-SHA256 签名（密钥为进程启动时随机生成、不落盘）
+- 有效期默认 300 秒，可配 `pull_file.url.ttl_sec`；下载次数可配 `pull_file.url.max_downloads`（0 = 不限制）
+- 服务重启后所有已签发 URL 立即失效
+- 下载时服务端会**再次**校验 allowed roots、扩展名白名单与大小上限（TOCTOU 防护）
+- 默认返回相对路径 `/file/<token>`，由客户端按自身 MCP base URL 拼接；反代/公网部署可配置 `pull_file.url.public_base_url` 返回绝对 URL
+- 每次下载写入独立审计事件（`tool=fs.pull_file.download`），记录 remote_addr、目标路径、成功/失败与耗时，不记录文件内容
+
+注意：下载 URL 是发给客户端的临时凭据，客户端不应转发给无关方。
+
 ## 7. `fs.apply_unified_diff` 使用约定（重要）
 
 这是当前推荐给 AI 代理处理**复杂多处修改**的主力工具。
@@ -575,6 +589,17 @@ data: {jsonrpc response or notification}
 4. 修改时优先：
    - 复杂改动用 `fs.apply_unified_diff`
    - 小改动用 `fs.edit_lines`
+
+## 7.8 `fs.pull_file` 使用约定
+
+- 用途：把服务器工作区文件拉回客户端本地（典型场景：客户端需要把服务器上的图片下载下来再交给 LLM 识别）
+- 调用参数：`path` 必填；`max_bytes` 可选，只能比配置的 `pull_file.max_bytes` 更严格
+- 返回 `url`：默认 `url_kind=relative`（`/file/<token>`），**客户端必须用自己请求 MCP 的 base URL 做相对解析**；不要假设 hostname
+- 配置了 `pull_file.url.public_base_url` 时返回 `url_kind=absolute`，可直接使用
+- 下载后建议校验返回的 `bytes`（以及可选地自行比对文件内容），确认完整
+- 类型白名单：`pull_file.allowed_extensions`（如只允许图片 `.png`/`.jpg`/`.bmp`）；空 = 不限制
+- 下载链接有时效和次数限制；服务重启后立即失效，请勿缓存复用
+- 文本文件场景仍优先使用 `fs.read_file`（省去下载与落盘）；`fs.pull_file` 面向二进制/大文件/图片
 
 ## 8. 推荐调用流程
 

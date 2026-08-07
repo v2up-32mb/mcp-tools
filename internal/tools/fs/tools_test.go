@@ -154,6 +154,7 @@ func TestFSSchemasDeclareNumericMinimums(t *testing.T) {
 		{tool: "fs.edit_lines", prop: "end_line", want: 1},
 		{tool: "fs.edit_lines", prop: "context_lines", want: 0},
 		{tool: "fs.apply_unified_diff", prop: "context_lines", want: 0},
+		{tool: "fs.pull_file", prop: "max_bytes", want: 1},
 	}
 
 	for _, tt := range tests {
@@ -189,6 +190,7 @@ func TestFSSchemasDeclareStringMinLength(t *testing.T) {
 		{tool: "fs.edit_lines", prop: "path"},
 		{tool: "fs.apply_unified_diff", prop: "path"},
 		{tool: "fs.apply_unified_diff", prop: "diff"},
+		{tool: "fs.pull_file", prop: "path"},
 	}
 
 	for _, tt := range tests {
@@ -1878,6 +1880,7 @@ func TestReadOnlyFlagMatchesToolSemantics(t *testing.T) {
 		"fs.list_dir":    true,
 		"fs.stat_path":   true,
 		"fs.search_text": true,
+		"fs.pull_file":   true,
 	}
 	writeTools := map[string]bool{
 		"fs.write_file":         false,
@@ -1901,4 +1904,113 @@ func TestReadOnlyFlagMatchesToolSemantics(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestPullFileIssuesRelativeURL(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.PullFile = config.PullFileConfig{Enabled: true, MaxBytes: 1 << 20, TTLSeconds: 300}
+	target := filepath.Join(cfg.StartupDirectory, "progress.png")
+	if err := os.WriteFile(target, []byte(pngBytes()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := findTool(t, cfg, "fs.pull_file")
+	result, err := tool.Call(context.Background(), mcp.CallContext{Host: "127.0.0.1:8080"}, map[string]any{"path": "progress.png"})
+	if err != nil {
+		t.Fatalf("pull_file failed: %v", err)
+	}
+	got := result.StructuredContent
+	if got["url_kind"] != "relative" {
+		t.Fatalf("url_kind=%v", got["url_kind"])
+	}
+	url, _ := got["url"].(string)
+	if !strings.HasPrefix(url, "/file/") {
+		t.Fatalf("url=%q", url)
+	}
+	if got["filename"] != "progress.png" {
+		t.Fatalf("filename=%v", got["filename"])
+	}
+	if got["mime_type"] != "image/png" {
+		t.Fatalf("mime_type=%v", got["mime_type"])
+	}
+	if got["host_hint"] != "127.0.0.1:8080" {
+		t.Fatalf("host_hint=%v", got["host_hint"])
+	}
+	if got["expires_in_sec"] != 300 {
+		t.Fatalf("expires_in_sec=%v", got["expires_in_sec"])
+	}
+}
+
+func TestPullFileIssuesAbsoluteURLWithPublicBase(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.PullFile = config.PullFileConfig{Enabled: true, MaxBytes: 1 << 20, TTLSeconds: 300, PublicBaseURL: "https://public.example.com/mcp-tools"}
+	target := filepath.Join(cfg.StartupDirectory, "progress.png")
+	if err := os.WriteFile(target, []byte(pngBytes()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := findTool(t, cfg, "fs.pull_file")
+	result, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "progress.png"})
+	if err != nil {
+		t.Fatalf("pull_file failed: %v", err)
+	}
+	got := result.StructuredContent
+	if got["url_kind"] != "absolute" {
+		t.Fatalf("url_kind=%v", got["url_kind"])
+	}
+	url, _ := got["url"].(string)
+	if !strings.HasPrefix(url, "https://public.example.com/mcp-tools/file/") {
+		t.Fatalf("url=%q", url)
+	}
+}
+
+func TestPullFileDisabled(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.PullFile = config.PullFileConfig{Enabled: false}
+	tool := findTool(t, cfg, "fs.pull_file")
+	if _, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "x.png"}); err == nil {
+		t.Fatal("expected disabled error")
+	}
+}
+
+func TestPullFileRejectsExtensionWhitelist(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.PullFile = config.PullFileConfig{Enabled: true, MaxBytes: 1 << 20, TTLSeconds: 300, AllowedExtensions: []string{".jpg"}}
+	target := filepath.Join(cfg.StartupDirectory, "progress.png")
+	if err := os.WriteFile(target, []byte(pngBytes()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := findTool(t, cfg, "fs.pull_file")
+	if _, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "progress.png"}); err == nil {
+		t.Fatal("expected extension rejection")
+	}
+}
+
+func TestPullFileRejectsOversize(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.PullFile = config.PullFileConfig{Enabled: true, MaxBytes: 4, TTLSeconds: 300}
+	target := filepath.Join(cfg.StartupDirectory, "progress.png")
+	if err := os.WriteFile(target, []byte(pngBytes()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := findTool(t, cfg, "fs.pull_file")
+	if _, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "progress.png"}); err == nil {
+		t.Fatal("expected oversize rejection")
+	}
+}
+
+func TestPullFileMaxBytesParamCannotExceedConfig(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.PullFile = config.PullFileConfig{Enabled: true, MaxBytes: 4, TTLSeconds: 300}
+	target := filepath.Join(cfg.StartupDirectory, "progress.png")
+	if err := os.WriteFile(target, []byte(pngBytes()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := findTool(t, cfg, "fs.pull_file")
+	// Caller may not raise the cap: config max_bytes=4 must still reject.
+	if _, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "progress.png", "max_bytes": 1 << 20}); err == nil {
+		t.Fatal("expected oversize rejection despite caller max_bytes")
+	}
+}
+
+func pngBytes() []byte {
+	return []byte("\x89PNG\r\n\x1a\n" + strings.Repeat("x", 64))
 }

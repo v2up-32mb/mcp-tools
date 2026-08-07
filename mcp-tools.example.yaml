@@ -262,3 +262,35 @@ exec:
         GOFLAGS: ""
       timeout_sec: 30
       read_only: false
+
+# fs.pull_file：把服务器工作区文件拉回客户端。
+#
+# 客户端调用 fs.pull_file 后会拿到一个带签名的短时效下载 URL，
+# 用 GET 访问该 URL 即可把文件下载到客户端本地（URL 是唯一授权凭据）。
+# 默认返回相对路径 URL（/file/<token>），客户端用自己的 MCP base URL 拼接；
+# 反代/公网部署时配置 url.public_base_url 可让服务端直接返回绝对 URL。
+#
+# 安全说明：
+# - token 内嵌文件路径 + HMAC 签名，不可伪造、不可篡改
+# - 服务重启后所有已签发 URL 立即失效（签名密钥不落盘）
+# - 下载时服务端会再次校验 allowed roots、扩展名白名单与大小上限
+pull_file:
+  enabled: true
+  # 扩展名白名单。空 = 不限制类型；大小写不敏感，条目必须以 "." 开头。
+  # 例：只想允许图片：
+  # allowed_extensions:
+  #   - .png
+  #   - .jpg
+  #   - .jpeg
+  #   - .bmp
+  allowed_extensions: []
+  # 单文件大小上限（字节），默认 10 MiB
+  max_bytes: 10485760
+  url:
+    # 下载链接有效期（秒），默认 300（5 分钟）
+    ttl_sec: 300
+    # 可下载次数：0 = 不限制（仅受 ttl_sec 约束）；>0 = 次数上限
+    max_downloads: 0
+    # 可选。外部可访问的 base URL（必须 http/https，不能带 query/fragment）。
+    # 留空 = 工具返回相对路径 /file/<token>，由客户端按自身 MCP base 拼接。
+    # public_base_url: "https://files.example.com/mcp-tools"

@@ -18,6 +18,7 @@ import (
 
 	"github.com/example/mcp-tools/internal/config"
 	"github.com/example/mcp-tools/internal/mcp"
+	"github.com/example/mcp-tools/internal/pullfile"
 	"github.com/example/mcp-tools/internal/security"
 	"github.com/example/mcp-tools/internal/session"
 )
@@ -32,6 +33,7 @@ type Server struct {
 	streams  *streamHub
 	resSubs  *resourceSubscriptions
 	metrics  *serverMetrics
+	pull     *pullfile.Manager
 }
 
 type rpcRequest struct {
@@ -59,7 +61,7 @@ type rpcError struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
-func NewServer(cfg config.Config, registry *mcp.Registry) http.Handler {
+func NewServer(cfg config.Config, registry *mcp.Registry, pull ...*pullfile.Manager) http.Handler {
 	srv := &Server{
 		cfg:      cfg,
 		registry: registry,
@@ -68,10 +70,14 @@ func NewServer(cfg config.Config, registry *mcp.Registry) http.Handler {
 		resSubs:  newResourceSubscriptions(),
 		metrics:  newServerMetrics(),
 	}
+	if len(pull) > 0 && pull[0] != nil {
+		srv.pull = pull[0]
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", srv.handleHealthz)
 	mux.HandleFunc("/readyz", srv.handleReadyz)
 	mux.HandleFunc("/debug/statez", srv.handleStatez)
+	mux.HandleFunc("/file/", srv.handleFileDownload)
 	mux.HandleFunc("/mcp", srv.handleMCP)
 	return withCORS(cfg, mux)
 }
@@ -470,6 +476,7 @@ func (s *Server) callToolWithSession(r *http.Request, req rpcRequest, sess sessi
 	}
 	result, err := s.registry.Call(r.Context(), mcp.CallContext{
 		RemoteAddr:      r.RemoteAddr,
+		Host:            r.Host,
 		RequestID:       requestID(r),
 		SessionID:       sess.ID,
 		ProtocolVersion: sess.ProtocolVersion,
@@ -1784,6 +1791,64 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func (s *Server) handleFileDownload(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
+	if s.pull == nil || !s.cfg.PullFile.Enabled {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		s.pull.RecordDownload(started, r.RemoteAddr, "", "method not allowed", false)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	token := strings.TrimPrefix(r.URL.Path, "/file/")
+	if token == "" || strings.Contains(token, "/") {
+		s.pull.RecordDownload(started, r.RemoteAddr, "", "invalid token", false)
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "invalid or expired download link"})
+		return
+	}
+	path, err := s.pull.Resolve(token, time.Now())
+	if err != nil {
+		s.pull.RecordDownload(started, r.RemoteAddr, "", err.Error(), false)
+		if errors.Is(err, pullfile.ErrNotExist) {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "invalid or expired download link"})
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		s.pull.RecordDownload(started, r.RemoteAddr, path, "file not found", false)
+		http.NotFound(w, r)
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		s.pull.RecordDownload(started, r.RemoteAddr, path, "open failed", false)
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	filename := filepath.Base(path)
+	contentType := mime.TypeByExtension(filepath.Ext(filename))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", `inline; filename="`+sanitizeHeaderValue(filename)+`"`)
+	http.ServeContent(w, r, filename, info.ModTime(), f)
+	s.pull.RecordDownload(started, r.RemoteAddr, path, fmt.Sprintf("served %d bytes", info.Size()), true)
+}
+
+func sanitizeHeaderValue(value string) string {
+	value = strings.ReplaceAll(value, `"`, "")
+	value = strings.ReplaceAll(value, "\n", "")
+	value = strings.ReplaceAll(value, "\n", "")
+	return value
 }
 
 func withCORS(cfg config.Config, next http.Handler) http.Handler {

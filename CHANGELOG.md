@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### Added
+- 新增 `fs.pull_file` 工具：为服务器工作区文件签发短时效、可限次、HMAC 签名绑定的下载 URL，客户端通过 `GET /file/<token>` 自行下载保存。
+  - 新配置段 `pull_file`：`enabled` / `allowed_extensions` / `max_bytes` / `url.ttl_sec` / `url.max_downloads` / `url.public_base_url`
+  - 默认返回相对路径 URL（客户端按自身 MCP base URL 拼接），可配置 `public_base_url` 返回绝对 URL
+  - 下载端点独立审计事件 `fs.pull_file.download`
+  - 新增 `internal/pullfile` 包与 `internal/httpapi/download_test.go` 端到端覆盖
+
 ## [1.0.0] - 2026-04-30
 
 ### Added

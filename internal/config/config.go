@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/example/mcp-tools/internal/util"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -61,6 +62,16 @@ type Config struct {
 	ServerName            string
 	ServerVersion         string
 	SupportedProtocols    []string
+	PullFile              PullFileConfig
+}
+
+type PullFileConfig struct {
+	Enabled           bool
+	AllowedExtensions []string
+	MaxBytes          int64
+	TTLSeconds        int
+	MaxDownloads      int
+	PublicBaseURL     string
 }
 
 type ExecPreset struct {
@@ -89,29 +100,43 @@ type LoadOptions struct {
 }
 
 type fileConfig struct {
-	ListenAddr            string         `yaml:"listen_addr"`
-	BearerToken           string         `yaml:"bearer_token"`
-	LogLevel              string         `yaml:"log_level"`
-	UnsafeAllowAll        *bool          `yaml:"unsafe_allow_all"`
-	AllowedRoots          []string       `yaml:"allowed_roots"`
-	AllowedOrigins        []string       `yaml:"allowed_origins"`
-	AuditLogPath          string         `yaml:"audit_log_path"`
-	AuditRotateMaxMB      *int           `yaml:"audit_rotate_max_mb"`
-	AuditRotateMaxBackups *int           `yaml:"audit_rotate_max_backups"`
-	CommandTimeoutSec     *int           `yaml:"command_timeout_sec"`
-	OutputMaxBytes        *int           `yaml:"output_max_bytes"`
-	StreamQueueSize       *int           `yaml:"stream_queue_size"`
-	MaxRequestBytes       *int64         `yaml:"max_request_bytes"`
-	ReadHeaderTimeoutSec  *int           `yaml:"read_header_timeout_sec"`
-	ReadTimeoutSec        *int           `yaml:"read_timeout_sec"`
-	WriteTimeoutSec       *int           `yaml:"write_timeout_sec"`
-	IdleTimeoutSec        *int           `yaml:"idle_timeout_sec"`
-	SessionTTLMin         *int           `yaml:"session_ttl_min"`
-	ServerName            string         `yaml:"server_name"`
-	ServerVersion         string         `yaml:"server_version"`
-	SupportedProtocols    *[]string      `yaml:"supported_protocols"`
-	Git                   fileGitConfig  `yaml:"git"`
-	Exec                  fileExecConfig `yaml:"exec"`
+	ListenAddr            string              `yaml:"listen_addr"`
+	BearerToken           string              `yaml:"bearer_token"`
+	LogLevel              string              `yaml:"log_level"`
+	UnsafeAllowAll        *bool               `yaml:"unsafe_allow_all"`
+	AllowedRoots          []string            `yaml:"allowed_roots"`
+	AllowedOrigins        []string            `yaml:"allowed_origins"`
+	AuditLogPath          string              `yaml:"audit_log_path"`
+	AuditRotateMaxMB      *int                `yaml:"audit_rotate_max_mb"`
+	AuditRotateMaxBackups *int                `yaml:"audit_rotate_max_backups"`
+	CommandTimeoutSec     *int                `yaml:"command_timeout_sec"`
+	OutputMaxBytes        *int                `yaml:"output_max_bytes"`
+	StreamQueueSize       *int                `yaml:"stream_queue_size"`
+	MaxRequestBytes       *int64              `yaml:"max_request_bytes"`
+	ReadHeaderTimeoutSec  *int                `yaml:"read_header_timeout_sec"`
+	ReadTimeoutSec        *int                `yaml:"read_timeout_sec"`
+	WriteTimeoutSec       *int                `yaml:"write_timeout_sec"`
+	IdleTimeoutSec        *int                `yaml:"idle_timeout_sec"`
+	SessionTTLMin         *int                `yaml:"session_ttl_min"`
+	ServerName            string              `yaml:"server_name"`
+	ServerVersion         string              `yaml:"server_version"`
+	SupportedProtocols    *[]string           `yaml:"supported_protocols"`
+	Git                   fileGitConfig       `yaml:"git"`
+	Exec                  fileExecConfig      `yaml:"exec"`
+	PullFile              *filePullFileConfig `yaml:"pull_file"`
+}
+
+type filePullFileConfig struct {
+	Enabled           *bool                 `yaml:"enabled"`
+	AllowedExtensions []string              `yaml:"allowed_extensions"`
+	MaxBytes          *int64                `yaml:"max_bytes"`
+	URL               filePullFileURLConfig `yaml:"url"`
+}
+
+type filePullFileURLConfig struct {
+	TTLSeconds    *int   `yaml:"ttl_sec"`
+	MaxDownloads  *int   `yaml:"max_downloads"`
+	PublicBaseURL string `yaml:"public_base_url"`
 }
 
 type fileGitConfig struct {
@@ -219,6 +244,11 @@ func defaultConfig(cwd string) Config {
 		ServerName:            "mcp-tools",
 		ServerVersion:         "1.0.0",
 		SupportedProtocols:    []string{ProtocolLatest, ProtocolCompat, ProtocolLegacy, ProtocolOld},
+		PullFile: PullFileConfig{
+			Enabled:    true,
+			MaxBytes:   10 * 1024 * 1024,
+			TTLSeconds: 300,
+		},
 	}
 }
 
@@ -362,6 +392,30 @@ func applyYAMLFile(cfg *Config, path string) error {
 			return err
 		}
 		cfg.CommandTemplates = merged
+	}
+	if fc.PullFile != nil {
+		if fc.PullFile.Enabled != nil {
+			cfg.PullFile.Enabled = *fc.PullFile.Enabled
+		}
+		if len(fc.PullFile.AllowedExtensions) > 0 {
+			extensions, err := normalizePullFileExtensions(fc.PullFile.AllowedExtensions)
+			if err != nil {
+				return fmt.Errorf("pull_file.allowed_extensions: %w", err)
+			}
+			cfg.PullFile.AllowedExtensions = extensions
+		}
+		if fc.PullFile.MaxBytes != nil {
+			cfg.PullFile.MaxBytes = *fc.PullFile.MaxBytes
+		}
+		if fc.PullFile.URL.TTLSeconds != nil {
+			cfg.PullFile.TTLSeconds = *fc.PullFile.URL.TTLSeconds
+		}
+		if fc.PullFile.URL.MaxDownloads != nil {
+			cfg.PullFile.MaxDownloads = *fc.PullFile.URL.MaxDownloads
+		}
+		if strings.TrimSpace(fc.PullFile.URL.PublicBaseURL) != "" {
+			cfg.PullFile.PublicBaseURL = strings.TrimRight(strings.TrimSpace(fc.PullFile.URL.PublicBaseURL), "/")
+		}
 	}
 	return nil
 }
@@ -956,6 +1010,53 @@ func validateConfig(cfg Config) error {
 				return fmt.Errorf("command template %q env: %w", name, err)
 			}
 		}
+	}
+	if cfg.PullFile.MaxBytes <= 0 {
+		return errors.New("pull_file.max_bytes must be positive")
+	}
+	if cfg.PullFile.TTLSeconds <= 0 {
+		return errors.New("pull_file.url.ttl_sec must be positive")
+	}
+	if cfg.PullFile.MaxDownloads < 0 {
+		return errors.New("pull_file.url.max_downloads must be non-negative")
+	}
+	if err := validatePullFilePublicBaseURL(cfg.PullFile.PublicBaseURL); err != nil {
+		return err
+	}
+	return nil
+}
+
+func normalizePullFileExtensions(values []string) ([]string, error) {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return nil, errors.New("cannot contain empty entries")
+		}
+		if !strings.HasPrefix(trimmed, ".") {
+			return nil, fmt.Errorf("extension %q must start with a dot", trimmed)
+		}
+		if strings.ContainsAny(trimmed, "/\\ \t") {
+			return nil, fmt.Errorf("extension %q is invalid", trimmed)
+		}
+		out = append(out, strings.ToLower(trimmed))
+	}
+	return out, nil
+}
+
+func validatePullFilePublicBaseURL(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("pull_file.url.public_base_url: %w", err)
+	}
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return errors.New("pull_file.url.public_base_url must be an absolute http(s) URL")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("pull_file.url.public_base_url must not contain query or fragment")
 	}
 	return nil
 }
