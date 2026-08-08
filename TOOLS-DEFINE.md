@@ -12,8 +12,8 @@
 
 - `fs.*`：文件系统工具
 - `git.*`：受限 Git 子命令
-- `exec.run`：受限命令执行 preset
-- `exec.run_template`：受限固定模板命令执行
+- `exec_run`：受限命令执行 preset
+- `exec_run_template`：受限固定模板命令执行
 - `go.*`：Go-only 导航工具
 
 统一约束：
@@ -33,7 +33,7 @@
 - `fs.*` 路径解析不再要求落在 `allowed_roots`
 - `git.*` 的 `repo_path` / repo root 不再要求落在 `allowed_roots`
 - `go.*` 的目标文件不再要求落在 `allowed_roots`
-- `exec.run` 允许原始命令模式
+- `exec_run` 允许原始命令模式
 
 ---
 
@@ -176,7 +176,7 @@
 
 1. `fs.*`
    - `resolvePathArg` 走 `security.ResolvePathUnsafe`
-2. `exec.run`
+2. `exec_run`
    - 除 preset 模式外，额外接受原始：
      - `command`
      - `args`
@@ -212,11 +212,11 @@
 ### 通用参数校验
 
 - `path` / `src` / `dst` 等路径参数必须是非空 JSON string；显式非字符串会返回 `must be a string`，不会被静默当作缺失参数。
-- 必填文本参数会在工具执行和落盘前再次做类型校验：`fs.write_file.text`、`fs.search_text.query`、`fs.replace_text.old_text` / `new_text`、`fs.edit_lines.new_text`、`fs.apply_unified_diff.diff` 显式非字符串均直接校验失败。
-- 运行时已拒绝空字符串的字段会在 schema 中同步声明 `minLength: 1`：路径参数（`path` / `src` / `dst`）、`fs.search_text.query`、`fs.replace_text.old_text`、`fs.apply_unified_diff.diff`。
+- 必填文本参数会在工具执行和落盘前再次做类型校验：`fs_write_file.text`、`fs_search_text.query`、`fs_replace_text.old_text` / `new_text`、`fs_edit_lines.new_text`、`fs_apply_unified_diff.diff` 显式非字符串均直接校验失败。
+- 运行时已拒绝空字符串的字段会在 schema 中同步声明 `minLength: 1`：路径参数（`path` / `src` / `dst`）、`fs_search_text.query`、`fs_replace_text.old_text`、`fs_apply_unified_diff.diff`。
 - 空字符串语义仍由各工具单独定义：`text` / `new_text` 可为空，`query` 只拒绝 `""`，`old_text` 不能为空，`diff` 不能为空白。
 
-## 3.1 `fs.read_file`
+## 3.1 `fs_read_file`
 
 ### 作用
 读取允许目录中的 UTF-8 文本文件。
@@ -233,7 +233,7 @@
 
 ---
 
-## 3.2 `fs.write_file`
+## 3.2 `fs_write_file`
 
 ### 作用
 原子写入整个文件。
@@ -259,7 +259,7 @@
 
 ---
 
-## 3.3 `fs.list_dir`
+## 3.3 `fs_list_dir`
 
 ### 作用
 列目录内容。
@@ -277,7 +277,7 @@
 
 ---
 
-## 3.4 `fs.stat_path`
+## 3.4 `fs_stat_path`
 
 ### 作用
 读取路径元信息。
@@ -293,7 +293,7 @@
 
 ---
 
-## 3.5 `fs.make_dir`
+## 3.5 `fs_make_dir`
 
 ### 作用
 递归建目录。
@@ -307,7 +307,7 @@
 
 ---
 
-## 3.6 `fs.move_path`
+## 3.6 `fs_move_path`
 
 ### 作用
 重命名或移动路径。
@@ -328,7 +328,7 @@
 
 ---
 
-## 3.7 `fs.delete_path`
+## 3.7 `fs_delete_path`
 
 ### 作用
 删除文件或空目录。
@@ -347,7 +347,7 @@
 
 ---
 
-## 3.8 `fs.replace_text`
+## 3.8 `fs_replace_text`
 
 ### 作用
 在单个文件中按精确旧文本替换新文本。
@@ -381,7 +381,7 @@
 
 ---
 
-## 3.9 `fs.search_text`
+## 3.9 `fs_search_text`
 
 ### 作用
 在文件或目录树中按子串搜索。
@@ -416,7 +416,7 @@
 
 ---
 
-## 3.10 `fs.apply_unified_diff`
+## 3.10 `fs_apply_unified_diff`
 
 ### 作用
 对单个文件应用**标准 unified diff**，用于复杂多处修改。
@@ -472,7 +472,7 @@
 
 ---
 
-## 3.11 `fs.edit_lines`
+## 3.11 `fs_edit_lines`
 
 ### 作用
 按 **1-based 行区间** 做严格行替换，减少上下文传输成本。
@@ -535,13 +535,13 @@
 
 ---
 
-## 3.12 `fs.pull_file`
+## 3.12 `fs_pull_file`
 
 ### 作用
 把服务器工作区内的文件**以短时效下载 URL 的形式**拉回客户端。
 
 典型场景：客户端需要查看服务器上的任务进度图片（如 `progress.png`），
-先调用 `fs.pull_file` 拿到 URL，再 `curl -o` 下载到本地交给 LLM 识别。
+先调用 `fs_pull_file` 拿到 URL，再 `curl -o` 下载到本地交给 LLM 识别。
 
 ### 定位
 本工具**不返回文件内容**，只签发下载 URL：
@@ -549,7 +549,7 @@
 - 通过 `GET /file/<token>` 下载，URL 本身是唯一授权凭据（无二级凭证）
 - 相对路径 URL（`/file/<token>`）由客户端用自身请求 MCP 的 base URL 解析；
   配置 `pull_file.url.public_base_url` 后返回绝对 URL
-- 与 `fs.read_file` 的关系：read_file 返回 UTF-8 文本内容；pull_file 面向
+- 与 `fs_read_file` 的关系：read_file 返回 UTF-8 文本内容；pull_file 面向
   二进制/大文件/图片，走 HTTP 流式下载，不经过 JSON-RPC 响应体
 
 ### 输入参数
@@ -605,7 +605,7 @@ pull_file:
 
 ### 副作用
 - 只读：不写服务端磁盘、不发资源更新通知
-- 每次下载写入独立审计事件 `fs.pull_file.download`（含 remote_addr、path、
+- 每次下载写入独立审计事件 `fs_pull_file.download`（含 remote_addr、path、
   成功/失败、耗时、`served N bytes` 摘要），不记录文件内容
 - token 内嵌文件路径且签名绑定；持有 URL 即具备该文件的可下载权限
 
@@ -634,12 +634,12 @@ Git 工具并不暴露任意 git 命令。
 5. 所有 git 命令都带：
    - `GIT_TERMINAL_PROMPT=0`
 6. 非白名单子命令直接拒绝
-7. `git.add` / `git.restore` / `git.diff` 的 `paths` 必须是 repo-relative，不能是绝对路径，也不能用 `..` 越界，不能以 `-` 伪装成选项，也不能以 `:` 使用 Git pathspec magic（例如 `:/`）
-8. `git.add` / `git.restore` 的 `paths` 运行时必须非空，schema 同步声明 `minItems: 1`；`git.diff` 的 `paths` 可省略或为空，表示不做路径过滤
+7. `git_add` / `git_restore` / `git_diff` 的 `paths` 必须是 repo-relative，不能是绝对路径，也不能用 `..` 越界，不能以 `-` 伪装成选项，也不能以 `:` 使用 Git pathspec magic（例如 `:/`）
+8. `git_add` / `git_restore` 的 `paths` 运行时必须非空，schema 同步声明 `minItems: 1`；`git_diff` 的 `paths` 可省略或为空，表示不做路径过滤
 
 ---
 
-## 4.2 `git.status`
+## 4.2 `git_status`
 固定执行：
 
 ```text
@@ -648,7 +648,7 @@ git status --short --branch
 
 只读。
 
-## 4.3 `git.diff`
+## 4.3 `git_diff`
 固定前缀：
 
 ```text
@@ -657,7 +657,7 @@ git diff [-- paths...]
 
 仅允许显式 repo-relative paths；拒绝绝对路径、`..` 越界、选项形式路径和以 `:` 开头的 Git pathspec magic。
 
-## 4.4 `git.log`
+## 4.4 `git_log`
 固定模式：
 
 ```text
@@ -666,15 +666,15 @@ git log --oneline -<limit>
 
 `limit` 省略时默认 20；显式提供时必须是正整数，`limit > 200` cap 到 200。
 
-## 4.5 `git.add`
+## 4.5 `git_add`
 仅允许显式 repo-relative paths；拒绝绝对路径、`..` 越界、选项形式路径和以 `:` 开头的 Git pathspec magic。
 `paths` 是必填非空数组，schema 声明 `minItems: 1`。
 
-## 4.6 `git.restore`
+## 4.6 `git_restore`
 仅允许显式 repo-relative paths；拒绝绝对路径、`..` 越界、选项形式路径和以 `:` 开头的 Git pathspec magic。
 `paths` 是必填非空数组，schema 声明 `minItems: 1`。
 
-## 4.7 `git.commit`
+## 4.7 `git_commit`
 要求：
 
 - `message` 非空
@@ -686,10 +686,10 @@ git log --oneline -<limit>
 git commit -m <message>
 ```
 
-## 4.8 `git.branch`
+## 4.8 `git_branch`
 只读列分支。
 
-## 4.9 `git.switch`
+## 4.9 `git_switch`
 要求：
 
 - branch 非空
@@ -697,7 +697,7 @@ git commit -m <message>
 - 不能以 `-` 开头
 - 不能包含空白字符
 
-## 4.10 `git.pull`
+## 4.10 `git_pull`
 固定为：
 
 ```text
@@ -706,7 +706,7 @@ git pull --ff-only
 
 ---
 
-## 5. `exec.run` 工具定义
+## 5. `exec_run` 工具定义
 
 ### 作用
 在允许目录下执行预定义 preset。
@@ -788,7 +788,7 @@ git pull --ff-only
 
 ---
 
-## 5.1 `exec.run_template` 工具定义
+## 5.1 `exec_run_template` 工具定义
 
 ### 作用
 在允许目录下执行服务端配置好的固定命令模板。
@@ -829,7 +829,7 @@ git pull --ff-only
 - `go_clean_testcache`（默认 `requires_confirmation=true`）
 
 ### discoverability
-- `exec.run_template` 的 schema 中，`template` 字段会带当前模板名 `enum`
+- `exec_run_template` 的 schema 中，`template` 字段会带当前模板名 `enum`
 - `/debug/statez` 会返回模板元信息（command/category/destructive/requires_confirmation/read_only/env_keys/allowed_workdirs）和模板调用计数
 
 ---
@@ -845,10 +845,10 @@ git pull --ff-only
   - `go/ast` 负责抽取文件结构
 - 所有 `path` 仍需落在 `allowed_roots` 内
 - 所有 Go 导航 `path` 必须是非空 JSON string；显式非字符串会在 package load 前返回 validation error
-- `go.find_definition.line` / `column` schema 声明 `minimum: 1`；调用层仍会重复校验正整数与位置越界
-- `go.find_definition` 若跳到 `allowed_roots` 外，只返回位置，不放开读取边界
+- `go_find_definition.line` / `column` schema 声明 `minimum: 1`；调用层仍会重复校验正整数与位置越界
+- `go_find_definition` 若跳到 `allowed_roots` 外，只返回位置，不放开读取边界
 
-### 5.2.2 `go.list_symbols`
+### 5.2.2 `go_list_symbols`
 
 #### 作用
 返回单个 Go 文件中的顶层结构索引，供 agent 做 outline。
@@ -875,7 +875,7 @@ git pull --ff-only
 - 不做 package-level 聚合
 - 不做 workspace-wide symbols
 
-### 5.2.3 `go.find_definition`
+### 5.2.3 `go_find_definition`
 
 #### 作用
 按 `path + line + column` 解析 Go 标识符并返回定义位置。
@@ -1004,7 +1004,7 @@ event: message
 
 ## 7. 后续维护时最容易改坏的点
 
-1. **`fs.apply_unified_diff` 的 patch 语义**
+1. **`fs_apply_unified_diff` 的 patch 语义**
    - 不要再退回到按原样拼接 replacement 文本，否则会重新引入行黏连问题
 
 2. **mixed Accept 的分流逻辑**

@@ -230,7 +230,7 @@ exec:
       timeout_sec: 30
       read_only: false
 
-  # fixed command templates for exec.run_template
+  # fixed command templates for exec_run_template
   command_templates:
     make_test:
       enabled: true
@@ -263,9 +263,9 @@ exec:
       timeout_sec: 30
       read_only: false
 
-# fs.pull_file：把服务器工作区文件拉回客户端。
+# fs_pull_file：把服务器工作区文件拉回客户端。
 #
-# 客户端调用 fs.pull_file 后会拿到一个带签名的短时效下载 URL，
+# 客户端调用 fs_pull_file 后会拿到一个带签名的短时效下载 URL，
 # 用 GET 访问该 URL 即可把文件下载到客户端本地（URL 是唯一授权凭据）。
 # 默认返回相对路径 URL（/file/<token>），客户端用自己的 MCP base URL 拼接；
 # 反代/公网部署时配置 url.public_base_url 可让服务端直接返回绝对 URL。

@@ -281,7 +281,7 @@ func TestSSEConcurrentSubscribersAllReceiveNotification(t *testing.T) {
 		"id":      3000,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "fs.write_file",
+			"name": "fs_write_file",
 			"arguments": map[string]any{
 				"path": target,
 				"text": "after\n",

@@ -16,7 +16,7 @@
 > ⚠️ **安全警告：`unsafe_allow_all` 默认启用**
 >
 > 本配置默认为 `true`，启用后对已授权客户端放开所有路径、工作目录、Git 仓库和命令执行限制。
-> `exec.run` 可执行任意命令，详见 `README.md` 和 `TOOLS-DEFINE.md` 中的安全边界说明。
+> `exec_run` 可执行任意命令，详见 `README.md` 和 `TOOLS-DEFINE.md` 中的安全边界说明。
 > **生产环境请通过 `MCP_UNSAFE_ALLOW_ALL=false` 或配置文件 `unsafe_allow_all: false` 关闭。**
 > 服务启动时会在控制台输出 WARN 级别告警。
 
@@ -184,30 +184,30 @@ data: {jsonrpc response or notification}
 
 ### 5.1 文件工具
 
-- `fs.read_file`
-- `fs.write_file`
-- `fs.list_dir`
-- `fs.stat_path`
-- `fs.make_dir`
-- `fs.move_path`
-- `fs.delete_path`
-- `fs.search_text`
-- `fs.replace_text`
-- `fs.apply_unified_diff`
-- `fs.edit_lines`
-- `fs.pull_file`
+- `fs_read_file`
+- `fs_write_file`
+- `fs_list_dir`
+- `fs_stat_path`
+- `fs_make_dir`
+- `fs_move_path`
+- `fs_delete_path`
+- `fs_search_text`
+- `fs_replace_text`
+- `fs_apply_unified_diff`
+- `fs_edit_lines`
+- `fs_pull_file`
 
 ### 5.2 Git 工具
 
-- `git.status`
-- `git.diff`
-- `git.log`
-- `git.add`
-- `git.restore`
-- `git.commit`
-- `git.branch`
-- `git.switch`
-- `git.pull`
+- `git_status`
+- `git_diff`
+- `git_log`
+- `git_add`
+- `git_restore`
+- `git_commit`
+- `git_branch`
+- `git_switch`
+- `git_pull`
 
 明确不支持：
 
@@ -217,13 +217,13 @@ data: {jsonrpc response or notification}
 
 ### 5.3 Go 导航工具
 
-- `go.list_symbols`
-- `go.find_definition`
+- `go_list_symbols`
+- `go_find_definition`
 
 ### 5.4 Exec 工具
 
-- `exec.run`
-- `exec.run_template`
+- `exec_run`
+- `exec_run_template`
 
 当前内置 preset 面向 Go：
 
@@ -250,7 +250,7 @@ data: {jsonrpc response or notification}
 
 - `unsafe_allow_all=true`
 
-则 `exec.run` 允许直接执行原始命令。
+则 `exec_run` 允许直接执行原始命令。
 
 ---
 
@@ -316,13 +316,13 @@ data: {jsonrpc response or notification}
 
 当前会在以下文件修改型工具成功后发送：
 
-- `fs.write_file`
-- `fs.replace_text`
-- `fs.apply_unified_diff`
-- `fs.edit_lines`
-- `fs.make_dir`
-- `fs.move_path`
-- `fs.delete_path`
+- `fs_write_file`
+- `fs_replace_text`
+- `fs_apply_unified_diff`
+- `fs_edit_lines`
+- `fs_make_dir`
+- `fs_move_path`
+- `fs_delete_path`
 
 通知方法：
 
@@ -393,20 +393,20 @@ data: {jsonrpc response or notification}
 
 ---
 
-## 6.7 文件拉取下载 URL（`fs.pull_file` / `GET /file/<token>`）
+## 6.7 文件拉取下载 URL（`fs_pull_file` / `GET /file/<token>`）
 
-`fs.pull_file` 是只读工具：签发一个**短时效、可限次、签名绑定文件路径**的下载 URL，客户端自行 `GET /file/<token>` 下载。这是"持有 URL 即授权"的凭据模型，与 Bearer Token 鉴权是两套体系：
+`fs_pull_file` 是只读工具：签发一个**短时效、可限次、签名绑定文件路径**的下载 URL，客户端自行 `GET /file/<token>` 下载。这是"持有 URL 即授权"的凭据模型，与 Bearer Token 鉴权是两套体系：
 
 - token 内嵌文件路径 + HMAC-SHA256 签名（密钥为进程启动时随机生成、不落盘）
 - 有效期默认 300 秒，可配 `pull_file.url.ttl_sec`；下载次数可配 `pull_file.url.max_downloads`（0 = 不限制）
 - 服务重启后所有已签发 URL 立即失效
 - 下载时服务端会**再次**校验 allowed roots、扩展名白名单与大小上限（TOCTOU 防护）
 - 默认返回相对路径 `/file/<token>`，由客户端按自身 MCP base URL 拼接；反代/公网部署可配置 `pull_file.url.public_base_url` 返回绝对 URL
-- 每次下载写入独立审计事件（`tool=fs.pull_file.download`），记录 remote_addr、目标路径、成功/失败与耗时，不记录文件内容
+- 每次下载写入独立审计事件（`tool=fs_pull_file.download`），记录 remote_addr、目标路径、成功/失败与耗时，不记录文件内容
 
 注意：下载 URL 是发给客户端的临时凭据，客户端不应转发给无关方。
 
-## 7. `fs.apply_unified_diff` 使用约定（重要）
+## 7. `fs_apply_unified_diff` 使用约定（重要）
 
 这是当前推荐给 AI 代理处理**复杂多处修改**的主力工具。
 
@@ -421,22 +421,22 @@ data: {jsonrpc response or notification}
 
 ### 推荐做法
 
-1. 先 `fs.read_file` 理解目标文件
-2. 复杂修改优先生成 unified diff，再调用 `fs.apply_unified_diff`
-3. 若返回结构化冲突，重新 `fs.read_file` 后再重生 patch
-4. 成功后再 `fs.read_file` 或 `exec.run` 验证
+1. 先 `fs_read_file` 理解目标文件
+2. 复杂修改优先生成 unified diff，再调用 `fs_apply_unified_diff`
+3. 若返回结构化冲突，重新 `fs_read_file` 后再重生 patch
+4. 成功后再 `fs_read_file` 或 `exec_run` 验证
 
-### 什么时候不用 `fs.apply_unified_diff`
+### 什么时候不用 `fs_apply_unified_diff`
 
 以下场景通常更适合别的工具：
 
-- 单点小改：用 `fs.edit_lines`
-- 精确旧文本替换：用 `fs.replace_text`
-- 整文件重写：用 `fs.write_file`
+- 单点小改：用 `fs_edit_lines`
+- 精确旧文本替换：用 `fs_replace_text`
+- 整文件重写：用 `fs_write_file`
 
 ---
 
-## 7.1 `fs.edit_lines` 使用约定（重要）
+## 7.1 `fs_edit_lines` 使用约定（重要）
 
 这是最推荐给 AI 代理使用的低上下文编辑工具。
 
@@ -451,14 +451,14 @@ data: {jsonrpc response or notification}
 
 ### 推荐做法
 
-1. 先 `fs.read_file`
-2. 再用 `fs.edit_lines`
+1. 先 `fs_read_file`
+2. 再用 `fs_edit_lines`
 3. 有并发敏感性时附带 `expected_old_text`
-4. 编辑后再 `fs.read_file` 或 `exec.run` 做验证
+4. 编辑后再 `fs_read_file` 或 `exec_run` 做验证
 
-### 什么时候不用 `fs.edit_lines`
+### 什么时候不用 `fs_edit_lines`
 
-以下场景建议直接 `fs.write_file`：
+以下场景建议直接 `fs_write_file`：
 
 - 要重写整个文件
 - 需要做复杂结构化重排
@@ -466,14 +466,14 @@ data: {jsonrpc response or notification}
 
 ---
 
-## 7.2 `fs.replace_text` 使用约定
+## 7.2 `fs_replace_text` 使用约定
 
 - 按精确旧文本替换新文本
 - 默认只替换第一处命中
 - `replace_all=true` 时替换所有命中
 - `expected_replacements` 可用于命中数保护
 
-## 7.3 `fs.search_text` 使用约定
+## 7.3 `fs_search_text` 使用约定
 
 - 当前是**子串匹配**，不是正则
 - `path` 可以是文件或目录
@@ -485,8 +485,8 @@ data: {jsonrpc response or notification}
 
 - 不传 `repo_path` 时，默认以服务启动目录作为仓库入口
 - `repo_path` 和真实仓库根都必须落在 `allowed_roots` 内
-- `git.add` / `git.restore` / `git.diff` 的 `paths` 必须是 repo-relative
-- `git.pull` 固定为 `--ff-only`
+- `git_add` / `git_restore` / `git_diff` 的 `paths` 必须是 repo-relative
+- `git_pull` 固定为 `--ff-only`
 
 在当前 `yolo` 分支里，若：
 
@@ -494,7 +494,7 @@ data: {jsonrpc response or notification}
 
 则 `repo_path` / repo root 不再要求落在 `allowed_roots` 内。
 
-## 7.5 `exec.run` 使用约定
+## 7.5 `exec_run` 使用约定
 
 - 默认仍支持预定义 preset
 - `workdir` 必填
@@ -513,13 +513,13 @@ data: {jsonrpc response or notification}
 - `-vettool` 不支持
 - `-o=...` / `-coverprofile=...` 这类 inline 路径值也会再次校验，不能写到 workdir 外
 
-### 7.5.1 `exec.run` 原始命令模式（仅 yolo 分支）
+### 7.5.1 `exec_run` 原始命令模式（仅 yolo 分支）
 
 当：
 
 - `unsafe_allow_all=true`
 
-时，`exec.run` 允许直接传：
+时，`exec_run` 允许直接传：
 
 - `command`
 - `args`
@@ -536,7 +536,7 @@ data: {jsonrpc response or notification}
 
 ---
 
-## 7.6 `exec.run_template` 使用约定
+## 7.6 `exec_run_template` 使用约定
 
 - 不是任意 shell，而是引用服务端配置好的固定模板
 - 客户端只能指定 `template` 和 `workdir`
@@ -549,7 +549,7 @@ data: {jsonrpc response or notification}
 
 ## 7.7 `go.*` 使用约定
 
-### `go.list_symbols`
+### `go_list_symbols`
 
 - 第一版只接受单个 Go 文件 `path`
 - 只返回该文件的顶层声明：
@@ -560,7 +560,7 @@ data: {jsonrpc response or notification}
   - `const`
 - 适合先看清文件结构，再决定是否继续读取或修改
 
-### `go.find_definition`
+### `go_find_definition`
 
 - 输入必须是：
   - `path`
@@ -583,14 +583,14 @@ data: {jsonrpc response or notification}
 
 ### 推荐做法
 
-1. 先 `go.list_symbols` 看文件结构
-2. 再用 `go.find_definition` 沿着具体标识符跳定义
-3. 若定义仍在允许目录内，再 `fs.read_file`
+1. 先 `go_list_symbols` 看文件结构
+2. 再用 `go_find_definition` 沿着具体标识符跳定义
+3. 若定义仍在允许目录内，再 `fs_read_file`
 4. 修改时优先：
-   - 复杂改动用 `fs.apply_unified_diff`
-   - 小改动用 `fs.edit_lines`
+   - 复杂改动用 `fs_apply_unified_diff`
+   - 小改动用 `fs_edit_lines`
 
-## 7.8 `fs.pull_file` 使用约定
+## 7.8 `fs_pull_file` 使用约定
 
 - 用途：把服务器工作区文件拉回客户端本地（典型场景：客户端需要把服务器上的图片下载下来再交给 LLM 识别）
 - 调用参数：`path` 必填；`max_bytes` 可选，只能比配置的 `pull_file.max_bytes` 更严格
@@ -599,7 +599,7 @@ data: {jsonrpc response or notification}
 - 下载后建议校验返回的 `bytes`（以及可选地自行比对文件内容），确认完整
 - 类型白名单：`pull_file.allowed_extensions`（如只允许图片 `.png`/`.jpg`/`.bmp`）；空 = 不限制
 - 下载链接有时效和次数限制；服务重启后立即失效，请勿缓存复用
-- 文本文件场景仍优先使用 `fs.read_file`（省去下载与落盘）；`fs.pull_file` 面向二进制/大文件/图片
+- 文本文件场景仍优先使用 `fs_read_file`（省去下载与落盘）；`fs_pull_file` 面向二进制/大文件/图片
 
 ## 8. 推荐调用流程
 
@@ -608,21 +608,21 @@ data: {jsonrpc response or notification}
 1. `initialize`
 2. `notifications/initialized`
 3. `tools/list` 或直接进入文件工具
-4. `fs.read_file`
-5. `fs.apply_unified_diff` / `fs.edit_lines` / `fs.write_file`
-6. `fs.read_file` 验证
-7. 如需要，再 `exec.run` / `git.*`
+4. `fs_read_file`
+5. `fs_apply_unified_diff` / `fs_edit_lines` / `fs_write_file`
+6. `fs_read_file` 验证
+7. 如需要，再 `exec_run` / `git.*`
 8. 完成后可 `DELETE /mcp`
 
 ### 代码任务（Go）
 
-1. 先 `go.list_symbols` 看结构
-2. 再按需要 `go.find_definition`
+1. 先 `go_list_symbols` 看结构
+2. 再按需要 `go_find_definition`
 3. 读取目标文件
-4. 复杂修改优先使用 `fs.apply_unified_diff`，小改动优先使用 `fs.edit_lines`
-5. `exec.run(go_fmt)`
-6. `exec.run(go_test)`
-7. 若需要，再 `git.status` / `git.diff`
+4. 复杂修改优先使用 `fs_apply_unified_diff`，小改动优先使用 `fs_edit_lines`
+5. `exec_run(go_fmt)`
+6. `exec_run(go_test)`
+7. 若需要，再 `git_status` / `git_diff`
 
 ---
 
@@ -639,6 +639,6 @@ data: {jsonrpc response or notification}
 - 工具参数 schema
 - 路径/仓库/workdir 校验规则
 - 资源通知触发条件
-- `fs.apply_unified_diff` patch 语义与严格命中规则
-- `fs.edit_lines` 行编辑语义
+- `fs_apply_unified_diff` patch 语义与严格命中规则
+- `fs_edit_lines` 行编辑语义
 - git / exec 白名单

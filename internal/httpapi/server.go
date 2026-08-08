@@ -1004,11 +1004,11 @@ func (s *Server) listPrompts() []map[string]any {
 		{
 			"name":        "safe_file_edit",
 			"title":       "Safe File Edit",
-			"description": "Plan a scoped file edit using fs.read_file plus fs.apply_unified_diff for complex edits or fs.edit_lines for small changes.",
+			"description": "Plan a scoped file edit using fs_read_file plus fs_apply_unified_diff for complex edits or fs_edit_lines for small changes.",
 			"arguments": []map[string]any{
 				promptArgument("task", "The edit objective.", true),
 				promptArgument("path", "Target file path inside allowed roots.", true),
-				promptArgument("expected_old_text", "Optional old text for optimistic concurrency during fs.apply_unified_diff or fs.edit_lines.", false),
+				promptArgument("expected_old_text", "Optional old text for optimistic concurrency during fs_apply_unified_diff or fs_edit_lines.", false),
 			},
 			"_meta": map[string]any{
 				"inputSchema": map[string]any{
@@ -1029,7 +1029,7 @@ func (s *Server) listPrompts() []map[string]any {
 						},
 						"expected_old_text": map[string]any{
 							"type":        "string",
-							"description": "Optional old text for optimistic concurrency during fs.apply_unified_diff or fs.edit_lines.",
+							"description": "Optional old text for optimistic concurrency during fs_apply_unified_diff or fs_edit_lines.",
 							"examples":    []string{"# old heading"},
 						},
 					},
@@ -1039,7 +1039,7 @@ func (s *Server) listPrompts() []map[string]any {
 		{
 			"name":        "go_dev_loop",
 			"title":       "Go Dev Loop",
-			"description": "Iterate on a Go code change using go.list_symbols/go.find_definition, fs editing tools, and exec.run gofmt/go test/go vet.",
+			"description": "Iterate on a Go code change using go_list_symbols/go_find_definition, fs editing tools, and exec_run gofmt/go test/go vet.",
 			"arguments": []map[string]any{
 				promptArgument("goal", "Requested Go change or bug fix.", true),
 				promptArgument("workdir", "Working directory for Go commands.", true),
@@ -1103,9 +1103,9 @@ func (s *Server) getPrompt(name string, args map[string]any) (map[string]any, er
 		if !taskSet || !pathSet {
 			return nil, errors.New("safe_file_edit requires task and path")
 		}
-		text := fmt.Sprintf("Edit %s for task %q. First inspect with fs.read_file, then use fs.apply_unified_diff for complex or multi-hunk edits (or fs.edit_lines for small scoped changes), then verify with fs.read_file or exec.run if relevant. Keep the target inside allowed roots.", path, task)
+		text := fmt.Sprintf("Edit %s for task %q. First inspect with fs_read_file, then use fs_apply_unified_diff for complex or multi-hunk edits (or fs_edit_lines for small scoped changes), then verify with fs_read_file or exec_run if relevant. Keep the target inside allowed roots.", path, task)
 		if expectedOldTextSet && strings.TrimSpace(expectedOldText) != "" {
-			text += fmt.Sprintf(" Use expected_old_text=%q when calling fs.apply_unified_diff or fs.edit_lines if the old text must match exactly.", expectedOldText)
+			text += fmt.Sprintf(" Use expected_old_text=%q when calling fs_apply_unified_diff or fs_edit_lines if the old text must match exactly.", expectedOldText)
 		}
 		return map[string]any{
 			"description": "Guide an agent through a safe scoped file edit.",
@@ -1140,7 +1140,7 @@ func (s *Server) getPrompt(name string, args map[string]any) (map[string]any, er
 		if !testTargetSet || strings.TrimSpace(testTarget) == "" {
 			testTarget = "./..."
 		}
-		text := fmt.Sprintf("Work in %s to achieve %q. Start with go.list_symbols and go.find_definition when that helps you understand the Go code, then inspect relevant files, use fs.apply_unified_diff for complex edits (or fs.edit_lines / fs.write_file when simpler), then run exec.run with go_fmt and go_test (target %s) as needed.", workdir, goal, testTarget)
+		text := fmt.Sprintf("Work in %s to achieve %q. Start with go_list_symbols and go_find_definition when that helps you understand the Go code, then inspect relevant files, use fs_apply_unified_diff for complex edits (or fs_edit_lines / fs_write_file when simpler), then run exec_run with go_fmt and go_test (target %s) as needed.", workdir, goal, testTarget)
 		if runVet {
 			text += " Include go_vet before concluding."
 		}
@@ -1303,19 +1303,19 @@ func (s *Server) maybeNotifyResourceUpdated(toolName string, args map[string]any
 	}
 	var uris []string
 	switch toolName {
-	case "fs.write_file", "fs.replace_text", "fs.apply_unified_diff", "fs.edit_lines", "fs.make_dir":
+	case "fs_write_file", "fs_replace_text", "fs_apply_unified_diff", "fs_edit_lines", "fs_make_dir":
 		if path, _ := args["path"].(string); strings.TrimSpace(path) != "" {
 			if resolved, err := s.resolvePathForResource(resolveAgainstStartup(path, s.cfg.StartupDirectory)); err == nil {
 				uris = append(uris, resourceUpdateTargets(resolved, s.cfg.AllowedRoots, s.cfg.UnsafeAllowAll)...)
 			}
 		}
-	case "fs.delete_path":
+	case "fs_delete_path":
 		if path, _ := args["path"].(string); strings.TrimSpace(path) != "" {
 			if resolved, err := s.resolvePathNoFollowFinalForResource(resolveAgainstStartup(path, s.cfg.StartupDirectory)); err == nil {
 				uris = append(uris, resourceUpdateTargets(resolved, s.cfg.AllowedRoots, s.cfg.UnsafeAllowAll)...)
 			}
 		}
-	case "fs.move_path":
+	case "fs_move_path":
 		for _, key := range []string{"src", "dst"} {
 			if path, _ := args[key].(string); strings.TrimSpace(path) != "" {
 				if resolved, err := s.resolvePathNoFollowFinalForResource(resolveAgainstStartup(path, s.cfg.StartupDirectory)); err == nil {
@@ -1430,7 +1430,7 @@ func summarizeCommandTemplates(templates map[string]config.CommandTemplate) map[
 }
 
 func (s *Server) trackTemplateCall(toolName string, args map[string]any, result mcp.Result) {
-	if toolName != "exec.run_template" {
+	if toolName != "exec_run_template" {
 		return
 	}
 	templateName, _ := args["template"].(string)

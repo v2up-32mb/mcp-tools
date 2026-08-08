@@ -90,7 +90,7 @@ func pullFileURL(t *testing.T, handler http.Handler, path string) string {
 		"id":      99,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name":      "fs.pull_file",
+			"name":      "fs_pull_file",
 			"arguments": map[string]any{"path": path},
 		},
 	}
@@ -139,12 +139,12 @@ func TestPullFileDownloadRoundtrip(t *testing.T) {
 		t.Fatalf("downloaded bytes mismatch: %d vs %d", len(rec.Body.Bytes()), len(raw))
 	}
 
-	// Audit must contain one fs.pull_file.download event.
+	// Audit must contain one fs_pull_file.download event.
 	payload, err := os.ReadFile(auditPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(payload, []byte(`"fs.pull_file.download"`)) {
+	if !bytes.Contains(payload, []byte(`"fs_pull_file.download"`)) {
 		t.Fatalf("audit missing download event: %s", payload)
 	}
 }
@@ -236,7 +236,7 @@ func TestPullFileRejectsPathOutsideAllowedRoots(t *testing.T) {
 		"id":      100,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name":      "fs.pull_file",
+			"name":      "fs_pull_file",
 			"arguments": map[string]any{"path": path},
 		},
 	}

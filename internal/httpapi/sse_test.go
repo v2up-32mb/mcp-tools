@@ -877,7 +877,7 @@ func TestSSEEditLinesAndAudit(t *testing.T) {
 		"id":      12,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "fs.edit_lines",
+			"name": "fs_edit_lines",
 			"arguments": map[string]any{
 				"path":       target,
 				"start_line": 2,
@@ -911,7 +911,7 @@ func TestSSEEditLinesAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(auditPayload, []byte("fs.edit_lines")) {
+	if !bytes.Contains(auditPayload, []byte("fs_edit_lines")) {
 		t.Fatalf("missing audit entry: %s", auditPayload)
 	}
 }
@@ -947,7 +947,7 @@ func TestSSEToolsCallRejectsNonStringName(t *testing.T) {
 		"id":      121,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name":      []any{"fs.list_dir"},
+			"name":      []any{"fs_list_dir"},
 			"arguments": map[string]any{},
 		},
 	}
@@ -1161,7 +1161,7 @@ func TestSSEAsyncToolErrorPublishesIsErrorResult(t *testing.T) {
 		"id":      14,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "fs.read_file",
+			"name": "fs_read_file",
 			"arguments": map[string]any{
 				"path": outside,
 			},
@@ -1268,7 +1268,7 @@ func TestSSESubscribedResourceReceivesUpdatedNotificationForEquivalentURI(t *tes
 		"id":      21,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "fs.write_file",
+			"name": "fs_write_file",
 			"arguments": map[string]any{
 				"path": target,
 				"text": "new\n",
@@ -1383,7 +1383,7 @@ func TestSSESubscribedResourceReceivesUpdatedNotificationFromUnifiedDiff(t *test
 		"id":      221,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "fs.apply_unified_diff",
+			"name": "fs_apply_unified_diff",
 			"arguments": map[string]any{
 				"path": "watched-diff.txt",
 				"diff": diff,
@@ -1487,7 +1487,7 @@ func TestSSESubscribedDirectoryReceivesChildUpdateNotification(t *testing.T) {
 		"id":      23,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "fs.write_file",
+			"name": "fs_write_file",
 			"arguments": map[string]any{
 				"path": child,
 				"text": "child\n",
@@ -1587,7 +1587,7 @@ func TestSSEMoveAndDeletePublishResourceNotifications(t *testing.T) {
 		"id":      31,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "fs.move_path",
+			"name": "fs_move_path",
 			"arguments": map[string]any{
 				"src": src,
 				"dst": dst,
@@ -1635,7 +1635,7 @@ func TestSSEMoveAndDeletePublishResourceNotifications(t *testing.T) {
 		"id":      32,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "fs.delete_path",
+			"name": "fs_delete_path",
 			"arguments": map[string]any{
 				"path": dst,
 			},
@@ -1728,7 +1728,7 @@ func TestSSEUnsubscribeStopsResourceNotifications(t *testing.T) {
 		"id":      50,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "fs.write_file",
+			"name": "fs_write_file",
 			"arguments": map[string]any{
 				"path": target,
 				"text": "after\n",

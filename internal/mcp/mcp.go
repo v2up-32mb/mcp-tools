@@ -310,25 +310,25 @@ func logToolCallError(callCtx CallContext, name string, args map[string]any, dur
 func summarizeToolFields(name string, args map[string]any) []applog.Field {
 	fields := []applog.Field{{Key: "tool", Value: name}}
 	switch {
-	case strings.HasPrefix(name, "fs."):
+	case strings.HasPrefix(name, "fs_"):
 		fields = appendPathLikeField(fields, args, "path", "path")
 		fields = appendPathLikeField(fields, args, "target_path", "target_path")
 		fields = appendPathLikeField(fields, args, "uri", "uri")
 		fields = appendLineRangeFields(fields, args)
 		fields = appendLargeFieldSummaries(fields, args)
-	case strings.HasPrefix(name, "git."):
+	case strings.HasPrefix(name, "git_"):
 		fields = appendPathLikeField(fields, args, "repo_path", "repo_path")
 		fields = appendStringField(fields, args, "branch", "branch")
 		fields = appendPathsCountField(fields, args, "paths")
-	case name == "exec.run":
+	case name == "exec_run":
 		fields = appendStringField(fields, args, "preset", "preset")
 		fields = appendStringField(fields, args, "command", "command")
 		fields = appendPathLikeField(fields, args, "workdir", "workdir")
 		fields = appendArgsCountField(fields, args, "args")
-	case name == "exec.run_template":
+	case name == "exec_run_template":
 		fields = appendStringField(fields, args, "template", "template")
 		fields = appendPathLikeField(fields, args, "workdir", "workdir")
-	case strings.HasPrefix(name, "go."):
+	case strings.HasPrefix(name, "go_"):
 		fields = appendPathLikeField(fields, args, "path", "path")
 		fields = appendIntField(fields, args, "line", "line")
 		fields = appendIntField(fields, args, "column", "column")
@@ -354,7 +354,7 @@ func summarizeAuditArguments(name string, args map[string]any) map[string]any {
 				continue
 			}
 		case "args":
-			if strings.HasPrefix(name, "exec.") {
+			if strings.HasPrefix(name, "exec_") {
 				if summarized, ok := summarizeSliceArgument(value); ok {
 					out[key] = summarized
 					continue

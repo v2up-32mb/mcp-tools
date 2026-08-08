@@ -32,7 +32,7 @@ func TestRunTemplateRejectsUnknownTemplate(t *testing.T) {
 		CommandTimeout:   time.Second,
 		CommandTemplates: map[string]config.CommandTemplate{},
 	}
-	tool := findTool(t, cfg, "exec.run_template")
+	tool := findTool(t, cfg, "exec_run_template")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"template": "missing",
 		"workdir":  ".",
@@ -54,7 +54,7 @@ func TestRunTemplateRejectsNonStringTemplate(t *testing.T) {
 			"mark": {Command: []string{"sh", "-c", "printf ran > marker.txt"}, Timeout: time.Second},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run_template")
+	tool := findTool(t, cfg, "exec_run_template")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"template": []any{"mark"},
 		"workdir":  ".",
@@ -82,7 +82,7 @@ func TestRunTemplateRejectsNonStringWorkdir(t *testing.T) {
 			"mark": {Command: []string{"sh", "-c", "printf ran > marker.txt"}, Timeout: time.Second},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run_template")
+	tool := findTool(t, cfg, "exec_run_template")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"template": "mark",
 		"workdir":  []any{"."},
@@ -113,7 +113,7 @@ func TestRunTemplateExecutesConfiguredCommand(t *testing.T) {
 			"gomod": {Command: []string{"go", "env", "GOMOD"}, Category: "build", RequiresConfirmation: true, Timeout: 5 * time.Second},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run_template")
+	tool := findTool(t, cfg, "exec_run_template")
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"template": "gomod",
 		"workdir":  ".",
@@ -144,7 +144,7 @@ func TestRunTemplateTimeoutOverrideOnlyShortens(t *testing.T) {
 			"gomod": {Command: []string{"go", "env", "GOMOD"}, Timeout: time.Second},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run_template")
+	tool := findTool(t, cfg, "exec_run_template")
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"template":             "gomod",
 		"workdir":              ".",
@@ -163,7 +163,7 @@ func TestRunTemplateSchemaEnumeratesConfiguredTemplates(t *testing.T) {
 		"make_test":  {Command: []string{"make", "test"}, Category: "test", Destructive: false, RequiresConfirmation: false, Timeout: time.Second},
 		"make_build": {Command: []string{"make", "build"}, Category: "build", Destructive: true, RequiresConfirmation: true, Timeout: time.Second},
 	}}
-	tool := findTool(t, cfg, "exec.run_template")
+	tool := findTool(t, cfg, "exec_run_template")
 	schema := tool.Schema()
 	props := schema["properties"].(map[string]any)
 	templateProp := props["template"].(map[string]any)
@@ -189,7 +189,7 @@ func TestRunTemplateInjectsConfiguredEnv(t *testing.T) {
 			"envdump": {Command: []string{"env"}, Env: map[string]string{"MCP_TEMPLATE_TEST": "hello"}, Timeout: 5 * time.Second},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run_template")
+	tool := findTool(t, cfg, "exec_run_template")
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"template": "envdump",
 		"workdir":  ".",
@@ -216,7 +216,7 @@ func TestRunTemplateRejectsWorkdirOutsideTemplateScope(t *testing.T) {
 			"pwd": {Command: []string{"pwd"}, AllowedWorkdirs: []string{"sub"}, Timeout: 5 * time.Second},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run_template")
+	tool := findTool(t, cfg, "exec_run_template")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"template": "pwd",
 		"workdir":  ".",
@@ -237,7 +237,7 @@ func TestRunTemplateRequiresConfirmation(t *testing.T) {
 			"cleanup": {Command: []string{"pwd"}, Category: "cleanup", Destructive: true, RequiresConfirmation: true, Timeout: 5 * time.Second},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run_template")
+	tool := findTool(t, cfg, "exec_run_template")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"template": "cleanup",
 		"workdir":  ".",
@@ -270,7 +270,7 @@ func TestRunTemplateRejectsNonBooleanConfirm(t *testing.T) {
 			"mark": {Command: []string{"sh", "-c", "printf ran > marker.txt"}, Category: "test", Timeout: 5 * time.Second},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run_template")
+	tool := findTool(t, cfg, "exec_run_template")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"template": "mark",
 		"workdir":  ".",
@@ -298,7 +298,7 @@ func TestRunTemplateRequiresConfirmationWhenUnsafeAllowAllEnabled(t *testing.T) 
 			"cleanup": {Command: []string{"pwd"}, Category: "cleanup", Destructive: true, RequiresConfirmation: true, Timeout: 5 * time.Second},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run_template")
+	tool := findTool(t, cfg, "exec_run_template")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"template": "cleanup",
 		"workdir":  workdir,
@@ -339,7 +339,7 @@ func TestRunTemplateAllowedWorkdirsStillApplyWhenUnsafeAllowAllEnabled(t *testin
 			"pwd": {Command: []string{"pwd"}, AllowedWorkdirs: []string{"allowed"}, Timeout: 5 * time.Second},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run_template")
+	tool := findTool(t, cfg, "exec_run_template")
 
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"template": "pwd",
@@ -372,7 +372,7 @@ func TestRunTemplateRejectsEmptyCommand(t *testing.T) {
 			"empty": {Timeout: 5 * time.Second},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run_template")
+	tool := findTool(t, cfg, "exec_run_template")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"template": "empty",
 		"workdir":  ".",

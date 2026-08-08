@@ -52,7 +52,7 @@ func NewTools(cfg config.Config) []mcp.Tool {
 	return []mcp.Tool{configuredTool{cfg: cfg}, templateTool{cfg: cfg}}
 }
 
-func (configuredTool) Name() string { return "exec.run" }
+func (configuredTool) Name() string { return "exec_run" }
 func (configuredTool) Description() string {
 	return "Run either a predefined Go toolchain preset or, when unsafe_allow_all is enabled, an arbitrary command inside the requested working directory. workdir is required; preset mode keeps the existing Go preset rules, while raw mode accepts command + args + optional env and gives the MCP client full local command execution."
 }
@@ -73,7 +73,7 @@ func (configuredTool) Schema() map[string]any {
 	}
 }
 
-func (templateTool) Name() string { return "exec.run_template" }
+func (templateTool) Name() string { return "exec_run_template" }
 func (t templateTool) Description() string {
 	names := sortedTemplateNames(t.cfg.CommandTemplates)
 	parts := make([]string, 0, len(names))

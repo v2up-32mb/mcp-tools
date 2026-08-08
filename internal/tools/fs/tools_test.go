@@ -43,12 +43,12 @@ func TestReadFileAllowsPathOutsideAllowedRootsWhenUnsafeAllowAllEnabled(t *testi
 		CommandTimeout:   5 * time.Second,
 		UnsafeAllowAll:   true,
 	}
-	tool := findTool(t, cfg, "fs.read_file")
+	tool := findTool(t, cfg, "fs_read_file")
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"path": target,
 	})
 	if err != nil {
-		t.Fatalf("fs.read_file failed: %v", err)
+		t.Fatalf("fs_read_file failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res)
@@ -60,7 +60,7 @@ func TestReadFileAllowsPathOutsideAllowedRootsWhenUnsafeAllowAllEnabled(t *testi
 
 func TestDeletePathRemovesSymlinkItselfNotTarget(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.delete_path")
+	tool := findTool(t, cfg, "fs_delete_path")
 	target := filepath.Join(cfg.StartupDirectory, "target.txt")
 	if err := os.WriteFile(target, []byte("keep\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestDeletePathRemovesSymlinkItselfNotTarget(t *testing.T) {
 
 func TestMovePathMovesSymlinkItselfNotTarget(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.move_path")
+	tool := findTool(t, cfg, "fs_move_path")
 	target := filepath.Join(cfg.StartupDirectory, "target.txt")
 	if err := os.WriteFile(target, []byte("keep\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -149,12 +149,12 @@ func TestFSSchemasDeclareNumericMinimums(t *testing.T) {
 		prop string
 		want int
 	}{
-		{tool: "fs.replace_text", prop: "expected_replacements", want: 0},
-		{tool: "fs.edit_lines", prop: "start_line", want: 1},
-		{tool: "fs.edit_lines", prop: "end_line", want: 1},
-		{tool: "fs.edit_lines", prop: "context_lines", want: 0},
-		{tool: "fs.apply_unified_diff", prop: "context_lines", want: 0},
-		{tool: "fs.pull_file", prop: "max_bytes", want: 1},
+		{tool: "fs_replace_text", prop: "expected_replacements", want: 0},
+		{tool: "fs_edit_lines", prop: "start_line", want: 1},
+		{tool: "fs_edit_lines", prop: "end_line", want: 1},
+		{tool: "fs_edit_lines", prop: "context_lines", want: 0},
+		{tool: "fs_apply_unified_diff", prop: "context_lines", want: 0},
+		{tool: "fs_pull_file", prop: "max_bytes", want: 1},
 	}
 
 	for _, tt := range tests {
@@ -175,22 +175,22 @@ func TestFSSchemasDeclareStringMinLength(t *testing.T) {
 		tool string
 		prop string
 	}{
-		{tool: "fs.read_file", prop: "path"},
-		{tool: "fs.write_file", prop: "path"},
-		{tool: "fs.list_dir", prop: "path"},
-		{tool: "fs.stat_path", prop: "path"},
-		{tool: "fs.make_dir", prop: "path"},
-		{tool: "fs.move_path", prop: "src"},
-		{tool: "fs.move_path", prop: "dst"},
-		{tool: "fs.delete_path", prop: "path"},
-		{tool: "fs.search_text", prop: "path"},
-		{tool: "fs.search_text", prop: "query"},
-		{tool: "fs.replace_text", prop: "path"},
-		{tool: "fs.replace_text", prop: "old_text"},
-		{tool: "fs.edit_lines", prop: "path"},
-		{tool: "fs.apply_unified_diff", prop: "path"},
-		{tool: "fs.apply_unified_diff", prop: "diff"},
-		{tool: "fs.pull_file", prop: "path"},
+		{tool: "fs_read_file", prop: "path"},
+		{tool: "fs_write_file", prop: "path"},
+		{tool: "fs_list_dir", prop: "path"},
+		{tool: "fs_stat_path", prop: "path"},
+		{tool: "fs_make_dir", prop: "path"},
+		{tool: "fs_move_path", prop: "src"},
+		{tool: "fs_move_path", prop: "dst"},
+		{tool: "fs_delete_path", prop: "path"},
+		{tool: "fs_search_text", prop: "path"},
+		{tool: "fs_search_text", prop: "query"},
+		{tool: "fs_replace_text", prop: "path"},
+		{tool: "fs_replace_text", prop: "old_text"},
+		{tool: "fs_edit_lines", prop: "path"},
+		{tool: "fs_apply_unified_diff", prop: "path"},
+		{tool: "fs_apply_unified_diff", prop: "diff"},
+		{tool: "fs_pull_file", prop: "path"},
 	}
 
 	for _, tt := range tests {
@@ -219,7 +219,7 @@ func TestFSRequiredStringArgsRejectNonStrings(t *testing.T) {
 	}{
 		{
 			name: "read_file path",
-			tool: "fs.read_file",
+			tool: "fs_read_file",
 			args: map[string]any{
 				"path": []any{"existing.txt"},
 			},
@@ -227,7 +227,7 @@ func TestFSRequiredStringArgsRejectNonStrings(t *testing.T) {
 		},
 		{
 			name: "write_file text",
-			tool: "fs.write_file",
+			tool: "fs_write_file",
 			args: map[string]any{
 				"path": "write-type.txt",
 				"text": 123,
@@ -236,7 +236,7 @@ func TestFSRequiredStringArgsRejectNonStrings(t *testing.T) {
 		},
 		{
 			name: "move_path src",
-			tool: "fs.move_path",
+			tool: "fs_move_path",
 			args: map[string]any{
 				"src": []any{"existing.txt"},
 				"dst": "moved.txt",
@@ -245,7 +245,7 @@ func TestFSRequiredStringArgsRejectNonStrings(t *testing.T) {
 		},
 		{
 			name: "search_text query",
-			tool: "fs.search_text",
+			tool: "fs_search_text",
 			args: map[string]any{
 				"path":  "existing.txt",
 				"query": 123,
@@ -254,7 +254,7 @@ func TestFSRequiredStringArgsRejectNonStrings(t *testing.T) {
 		},
 		{
 			name: "replace_text old_text",
-			tool: "fs.replace_text",
+			tool: "fs_replace_text",
 			args: map[string]any{
 				"path":     "existing.txt",
 				"old_text": 123,
@@ -264,7 +264,7 @@ func TestFSRequiredStringArgsRejectNonStrings(t *testing.T) {
 		},
 		{
 			name: "replace_text new_text",
-			tool: "fs.replace_text",
+			tool: "fs_replace_text",
 			args: map[string]any{
 				"path":     "existing.txt",
 				"old_text": "alpha",
@@ -274,7 +274,7 @@ func TestFSRequiredStringArgsRejectNonStrings(t *testing.T) {
 		},
 		{
 			name: "edit_lines new_text",
-			tool: "fs.edit_lines",
+			tool: "fs_edit_lines",
 			args: map[string]any{
 				"path":       "existing.txt",
 				"start_line": 1,
@@ -285,7 +285,7 @@ func TestFSRequiredStringArgsRejectNonStrings(t *testing.T) {
 		},
 		{
 			name: "apply_unified_diff diff",
-			tool: "fs.apply_unified_diff",
+			tool: "fs_apply_unified_diff",
 			args: map[string]any{
 				"path": "existing.txt",
 				"diff": 123,
@@ -321,7 +321,7 @@ func TestFSRequiredStringArgsRejectNonStrings(t *testing.T) {
 
 func TestEditLinesExpandsWithoutShiftingFollowingContent(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.edit_lines")
+	tool := findTool(t, cfg, "fs_edit_lines")
 	target := filepath.Join(cfg.StartupDirectory, "expand.txt")
 	if err := os.WriteFile(target, []byte("a\nb\nc\nd\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -349,7 +349,7 @@ func TestEditLinesExpandsWithoutShiftingFollowingContent(t *testing.T) {
 
 func TestEditLinesShrinksWithoutShiftingFollowingContent(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.edit_lines")
+	tool := findTool(t, cfg, "fs_edit_lines")
 	target := filepath.Join(cfg.StartupDirectory, "shrink.txt")
 	if err := os.WriteFile(target, []byte("a\nb\nc\nd\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -377,7 +377,7 @@ func TestEditLinesShrinksWithoutShiftingFollowingContent(t *testing.T) {
 
 func TestEditLinesSupportsReplacementWithoutTrailingNewline(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.edit_lines")
+	tool := findTool(t, cfg, "fs_edit_lines")
 	target := filepath.Join(cfg.StartupDirectory, "no-trailing-newline.txt")
 	if err := os.WriteFile(target, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -405,7 +405,7 @@ func TestEditLinesSupportsReplacementWithoutTrailingNewline(t *testing.T) {
 
 func TestEditLinesExpectedOldTextWithDifferentLineCountsStillMatchesExactRange(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.edit_lines")
+	tool := findTool(t, cfg, "fs_edit_lines")
 	target := filepath.Join(cfg.StartupDirectory, "expected.txt")
 	if err := os.WriteFile(target, []byte("top\nold1\nold2\nbottom\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -434,7 +434,7 @@ func TestEditLinesExpectedOldTextWithDifferentLineCountsStillMatchesExactRange(t
 
 func TestEditLinesHonorsEmptyExpectedOldText(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.edit_lines")
+	tool := findTool(t, cfg, "fs_edit_lines")
 	target := filepath.Join(cfg.StartupDirectory, "expected-empty.txt")
 	if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -465,7 +465,7 @@ func TestEditLinesHonorsEmptyExpectedOldText(t *testing.T) {
 
 func TestEditLinesRejectsNonStringExpectedOldText(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.edit_lines")
+	tool := findTool(t, cfg, "fs_edit_lines")
 	target := filepath.Join(cfg.StartupDirectory, "expected-type.txt")
 	if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -496,7 +496,7 @@ func TestEditLinesRejectsNonStringExpectedOldText(t *testing.T) {
 
 func TestEditLinesReturnsMismatchWhenExpectedOldTextWrong(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.edit_lines")
+	tool := findTool(t, cfg, "fs_edit_lines")
 	target := filepath.Join(cfg.StartupDirectory, "mismatch.txt")
 	if err := os.WriteFile(target, []byte("x\ny\nz\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -527,7 +527,7 @@ func TestEditLinesReturnsMismatchWhenExpectedOldTextWrong(t *testing.T) {
 
 func TestEditLinesRejectsFractionalLineNumber(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.edit_lines")
+	tool := findTool(t, cfg, "fs_edit_lines")
 	target := filepath.Join(cfg.StartupDirectory, "fractional-line.txt")
 	if err := os.WriteFile(target, []byte("a\nb\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -561,7 +561,7 @@ func TestRenderLineContextClampsEndToAvailableLines(t *testing.T) {
 
 func TestEditLinesNormalizesMultiLineReplacementWithoutTrailingNewline(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.edit_lines")
+	tool := findTool(t, cfg, "fs_edit_lines")
 	target := filepath.Join(cfg.StartupDirectory, "normalize-multi.txt")
 	if err := os.WriteFile(target, []byte("a\nb\nc\nd\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -589,7 +589,7 @@ func TestEditLinesNormalizesMultiLineReplacementWithoutTrailingNewline(t *testin
 
 func TestSearchTextSupportsLongLines(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.search_text")
+	tool := findTool(t, cfg, "fs_search_text")
 	target := filepath.Join(cfg.StartupDirectory, "long-line.txt")
 	payload := bytes.Repeat([]byte("a"), 70*1024)
 	payload = append(payload, []byte("needle\nshort line\n")...)
@@ -621,7 +621,7 @@ func TestSearchTextSupportsLongLines(t *testing.T) {
 
 func TestSearchTextAllowsWhitespaceOnlyQuery(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.search_text")
+	tool := findTool(t, cfg, "fs_search_text")
 	target := filepath.Join(cfg.StartupDirectory, "spaces.txt")
 	if err := os.WriteFile(target, []byte("alpha beta\nno-space\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -648,7 +648,7 @@ func TestSearchTextAllowsWhitespaceOnlyQuery(t *testing.T) {
 
 func TestSearchTextSingleFileLimitReturnsPartialMatches(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.search_text")
+	tool := findTool(t, cfg, "fs_search_text")
 	target := filepath.Join(cfg.StartupDirectory, "single-limit.txt")
 	if err := os.WriteFile(target, []byte("needle one\nneedle two\nneedle three\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -676,7 +676,7 @@ func TestSearchTextSingleFileLimitReturnsPartialMatches(t *testing.T) {
 
 func TestSearchTextSkipsFileSymlinkOutsideAllowedRoots(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.search_text")
+	tool := findTool(t, cfg, "fs_search_text")
 	outside := t.TempDir()
 	secret := filepath.Join(outside, "secret.txt")
 	if err := os.WriteFile(secret, []byte("needle secret\n"), 0o644); err != nil {
@@ -711,7 +711,7 @@ func TestSearchTextSkipsFileSymlinkOutsideAllowedRoots(t *testing.T) {
 
 func TestSearchTextRejectsNonIntegerLimit(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.search_text")
+	tool := findTool(t, cfg, "fs_search_text")
 	target := filepath.Join(cfg.StartupDirectory, "search-limit.txt")
 	if err := os.WriteFile(target, []byte("needle\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -738,7 +738,7 @@ func TestSearchTextRejectsNonIntegerLimit(t *testing.T) {
 
 func TestReplaceTextReplacesFirstOccurrenceByDefault(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.replace_text")
+	tool := findTool(t, cfg, "fs_replace_text")
 	target := filepath.Join(cfg.StartupDirectory, "replace-first.txt")
 	if err := os.WriteFile(target, []byte("hello foo world foo\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -765,7 +765,7 @@ func TestReplaceTextReplacesFirstOccurrenceByDefault(t *testing.T) {
 
 func TestReplaceTextReplacesAllOccurrences(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.replace_text")
+	tool := findTool(t, cfg, "fs_replace_text")
 	target := filepath.Join(cfg.StartupDirectory, "replace-all.txt")
 	if err := os.WriteFile(target, []byte("a foo b foo c\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -793,7 +793,7 @@ func TestReplaceTextReplacesAllOccurrences(t *testing.T) {
 
 func TestReplaceTextRejectsNonBooleanReplaceAll(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.replace_text")
+	tool := findTool(t, cfg, "fs_replace_text")
 	target := filepath.Join(cfg.StartupDirectory, "replace-bool.txt")
 	if err := os.WriteFile(target, []byte("foo foo\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -823,7 +823,7 @@ func TestReplaceTextRejectsNonBooleanReplaceAll(t *testing.T) {
 
 func TestReplaceTextRejectsExpectedReplacementMismatch(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.replace_text")
+	tool := findTool(t, cfg, "fs_replace_text")
 	target := filepath.Join(cfg.StartupDirectory, "replace-mismatch.txt")
 	if err := os.WriteFile(target, []byte("foo foo\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -845,7 +845,7 @@ func TestReplaceTextRejectsExpectedReplacementMismatch(t *testing.T) {
 
 func TestReplaceTextRejectsFractionalExpectedReplacements(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.replace_text")
+	tool := findTool(t, cfg, "fs_replace_text")
 	target := filepath.Join(cfg.StartupDirectory, "replace-fractional.txt")
 	if err := os.WriteFile(target, []byte("foo\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -864,7 +864,7 @@ func TestReplaceTextRejectsFractionalExpectedReplacements(t *testing.T) {
 
 func TestReplaceTextRejectsNegativeExpectedReplacements(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.replace_text")
+	tool := findTool(t, cfg, "fs_replace_text")
 	target := filepath.Join(cfg.StartupDirectory, "replace-negative.txt")
 	original := "foo\n"
 	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
@@ -891,7 +891,7 @@ func TestReplaceTextRejectsNegativeExpectedReplacements(t *testing.T) {
 
 func TestApplyUnifiedDiffSupportsMultipleHunks(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.apply_unified_diff")
+	tool := findTool(t, cfg, "fs_apply_unified_diff")
 	target := filepath.Join(cfg.StartupDirectory, "multi.diff.txt")
 	if err := os.WriteFile(target, []byte("alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -940,7 +940,7 @@ func TestApplyUnifiedDiffSupportsMultipleHunks(t *testing.T) {
 
 func TestApplyUnifiedDiffRejectsFractionalContextLines(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.apply_unified_diff")
+	tool := findTool(t, cfg, "fs_apply_unified_diff")
 	target := filepath.Join(cfg.StartupDirectory, "fractional-context.txt")
 	if err := os.WriteFile(target, []byte("alpha\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -958,7 +958,7 @@ func TestApplyUnifiedDiffRejectsFractionalContextLines(t *testing.T) {
 
 func TestApplyUnifiedDiffRejectsOverflowingHunkHeaderNumber(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.apply_unified_diff")
+	tool := findTool(t, cfg, "fs_apply_unified_diff")
 	target := filepath.Join(cfg.StartupDirectory, "overflow-hunk.txt")
 	original := "alpha\n"
 	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
@@ -994,7 +994,7 @@ func TestApplyUnifiedDiffRejectsOverflowingHunkHeaderNumber(t *testing.T) {
 
 func TestApplyUnifiedDiffRejectsZeroNewStartWithPositiveCount(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.apply_unified_diff")
+	tool := findTool(t, cfg, "fs_apply_unified_diff")
 	target := filepath.Join(cfg.StartupDirectory, "zero-new-start.txt")
 	original := "old\n"
 	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
@@ -1030,7 +1030,7 @@ func TestApplyUnifiedDiffRejectsZeroNewStartWithPositiveCount(t *testing.T) {
 
 func TestApplyUnifiedDiffDryRunLeavesFileUnchanged(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.apply_unified_diff")
+	tool := findTool(t, cfg, "fs_apply_unified_diff")
 	target := filepath.Join(cfg.StartupDirectory, "dry-run.txt")
 	original := "one\ntwo\nthree\n"
 	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
@@ -1074,7 +1074,7 @@ func TestApplyUnifiedDiffDryRunLeavesFileUnchanged(t *testing.T) {
 
 func TestApplyUnifiedDiffRejectsNonBooleanDryRun(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.apply_unified_diff")
+	tool := findTool(t, cfg, "fs_apply_unified_diff")
 	target := filepath.Join(cfg.StartupDirectory, "dry-run-bool.txt")
 	original := "one\ntwo\n"
 	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
@@ -1114,7 +1114,7 @@ func TestApplyUnifiedDiffRejectsNonBooleanDryRun(t *testing.T) {
 
 func TestApplyUnifiedDiffHonorsEmptyExpectedOldText(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.apply_unified_diff")
+	tool := findTool(t, cfg, "fs_apply_unified_diff")
 	target := filepath.Join(cfg.StartupDirectory, "expected-empty-diff.txt")
 	original := "old\n"
 	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
@@ -1156,7 +1156,7 @@ func TestApplyUnifiedDiffHonorsEmptyExpectedOldText(t *testing.T) {
 
 func TestApplyUnifiedDiffRejectsNonStringExpectedOldText(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.apply_unified_diff")
+	tool := findTool(t, cfg, "fs_apply_unified_diff")
 	target := filepath.Join(cfg.StartupDirectory, "expected-type-diff.txt")
 	original := "old\n"
 	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
@@ -1194,7 +1194,7 @@ func TestApplyUnifiedDiffRejectsNonStringExpectedOldText(t *testing.T) {
 
 func TestApplyUnifiedDiffReturnsStructuredConflict(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.apply_unified_diff")
+	tool := findTool(t, cfg, "fs_apply_unified_diff")
 	target := filepath.Join(cfg.StartupDirectory, "conflict.txt")
 	original := "one\ntwo\nthree\n"
 	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
@@ -1243,7 +1243,7 @@ func TestApplyUnifiedDiffReturnsStructuredConflict(t *testing.T) {
 
 func TestApplyUnifiedDiffSupportsNoNewlineMarker(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.apply_unified_diff")
+	tool := findTool(t, cfg, "fs_apply_unified_diff")
 	target := filepath.Join(cfg.StartupDirectory, "no-eol.txt")
 	if err := os.WriteFile(target, []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1278,7 +1278,7 @@ func TestApplyUnifiedDiffSupportsNoNewlineMarker(t *testing.T) {
 
 func TestApplyUnifiedDiffAllowsRelativeHeaderForDotDotPrefixedName(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.apply_unified_diff")
+	tool := findTool(t, cfg, "fs_apply_unified_diff")
 	target := filepath.Join(cfg.StartupDirectory, "..data", "target.txt")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		t.Fatal(err)
@@ -1314,7 +1314,7 @@ func TestApplyUnifiedDiffAllowsRelativeHeaderForDotDotPrefixedName(t *testing.T)
 
 func TestApplyUnifiedDiffRejectsTrailingGarbageAfterHunk(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.apply_unified_diff")
+	tool := findTool(t, cfg, "fs_apply_unified_diff")
 	target := filepath.Join(cfg.StartupDirectory, "garbage.txt")
 	if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1359,7 +1359,7 @@ func TestApplyUnifiedDiffRejectsTrailingGarbageAfterHunk(t *testing.T) {
 // matches==0 first ("old_text not found"), then the mismatch guard.
 func TestReplaceTextExpectedReplacementsZeroWithExistingRejects(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.replace_text")
+	tool := findTool(t, cfg, "fs_replace_text")
 	target := filepath.Join(cfg.StartupDirectory, "exists.txt")
 	if err := os.WriteFile(target, []byte("hello world"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1394,7 +1394,7 @@ func TestReplaceTextExpectedReplacementsZeroWithExistingRejects(t *testing.T) {
 // reorder is a deliberate, visible change.
 func TestReplaceTextExpectedReplacementsZeroWithMissingReportsNotFound(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.replace_text")
+	tool := findTool(t, cfg, "fs_replace_text")
 	target := filepath.Join(cfg.StartupDirectory, "missing.txt")
 	if err := os.WriteFile(target, []byte("hello world"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1424,7 +1424,7 @@ func TestReplaceTextExpectedReplacementsZeroWithMissingReportsNotFound(t *testin
 // surrounding lines collapse together.
 func TestEditLinesEmptyNewTextDeletesRange(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.edit_lines")
+	tool := findTool(t, cfg, "fs_edit_lines")
 	target := filepath.Join(cfg.StartupDirectory, "delete-range.txt")
 	if err := os.WriteFile(target, []byte("L1\nL2\nL3\nL4\nL5\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1452,7 +1452,7 @@ func TestEditLinesEmptyNewTextDeletesRange(t *testing.T) {
 // single blank line (new_text == "\n").
 func TestEditLinesNewTextSingleNewlineInsertsBlankLine(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.edit_lines")
+	tool := findTool(t, cfg, "fs_edit_lines")
 	target := filepath.Join(cfg.StartupDirectory, "blank-line.txt")
 	if err := os.WriteFile(target, []byte("a\nb\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1480,7 +1480,7 @@ func TestEditLinesNewTextSingleNewlineInsertsBlankLine(t *testing.T) {
 // when start > number of lines.
 func TestEditLinesStartBeyondFileLengthRejected(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.edit_lines")
+	tool := findTool(t, cfg, "fs_edit_lines")
 	target := filepath.Join(cfg.StartupDirectory, "oob.txt")
 	if err := os.WriteFile(target, []byte("only\nsecond\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1509,7 +1509,7 @@ func TestEditLinesStartBeyondFileLengthRejected(t *testing.T) {
 // TestEditLinesNegativeContextLinesRejected verifies context_lines < 0 fails.
 func TestEditLinesNegativeContextLinesRejected(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.edit_lines")
+	tool := findTool(t, cfg, "fs_edit_lines")
 	target := filepath.Join(cfg.StartupDirectory, "neg-ctx.txt")
 	if err := os.WriteFile(target, []byte("a\nb\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1536,7 +1536,7 @@ func TestEditLinesNegativeContextLinesRejected(t *testing.T) {
 // context windows on each side stop short of the file ends.
 func TestEditLinesContextLinesCapsAtTwenty(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.edit_lines")
+	tool := findTool(t, cfg, "fs_edit_lines")
 	target := filepath.Join(cfg.StartupDirectory, "ctx-cap.txt")
 	var buf bytes.Buffer
 	for i := 1; i <= 50; i++ {
@@ -1570,7 +1570,7 @@ func TestEditLinesContextLinesCapsAtTwenty(t *testing.T) {
 // non-empty directory cannot be deleted.
 func TestDeletePathFailsOnNonEmptyDirectory(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.delete_path")
+	tool := findTool(t, cfg, "fs_delete_path")
 	dir := filepath.Join(cfg.StartupDirectory, "nonempty")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -1594,7 +1594,7 @@ func TestDeletePathFailsOnNonEmptyDirectory(t *testing.T) {
 // should return all 5.
 func TestSearchTextLimitZeroFallsBackToDefault(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.search_text")
+	tool := findTool(t, cfg, "fs_search_text")
 	target := filepath.Join(cfg.StartupDirectory, "limit-zero.txt")
 	if err := os.WriteFile(target, []byte("needle one\nneedle two\nneedle three\nnot here\nneedle four\nneedle five\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1621,7 +1621,7 @@ func TestSearchTextLimitZeroFallsBackToDefault(t *testing.T) {
 
 func TestWriteFileCreatesParentDirectories(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.write_file")
+	tool := findTool(t, cfg, "fs_write_file")
 	relPath := filepath.Join("subdir", "deep", "file.txt")
 
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
@@ -1644,7 +1644,7 @@ func TestWriteFileCreatesParentDirectories(t *testing.T) {
 
 func TestMakeDirIsIdempotent(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.make_dir")
+	tool := findTool(t, cfg, "fs_make_dir")
 	relDir := filepath.Join("a", "b", "c")
 
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": relDir})
@@ -1666,7 +1666,7 @@ func TestMakeDirIsIdempotent(t *testing.T) {
 
 func TestMovePathToExistingDestinationOverwrites(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.move_path")
+	tool := findTool(t, cfg, "fs_move_path")
 	src := filepath.Join(cfg.StartupDirectory, "src.txt")
 	dst := filepath.Join(cfg.StartupDirectory, "dst.txt")
 	if err := os.WriteFile(src, []byte("from-src\n"), 0o644); err != nil {
@@ -1697,7 +1697,7 @@ func TestMovePathToExistingDestinationOverwrites(t *testing.T) {
 
 func TestReadFileRejectsNonExistentFile(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.read_file")
+	tool := findTool(t, cfg, "fs_read_file")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"path": "nonexistent.txt",
 	})
@@ -1711,7 +1711,7 @@ func TestReadFileRejectsNonExistentFile(t *testing.T) {
 
 func TestStatPathRejectsNonExistentFile(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.stat_path")
+	tool := findTool(t, cfg, "fs_stat_path")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"path": "nonexistent.txt",
 	})
@@ -1722,7 +1722,7 @@ func TestStatPathRejectsNonExistentFile(t *testing.T) {
 
 func TestSearchTextRejectsNonExistentDirectory(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.search_text")
+	tool := findTool(t, cfg, "fs_search_text")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"path":  "nonexistent_dir",
 		"query": "test",
@@ -1734,7 +1734,7 @@ func TestSearchTextRejectsNonExistentDirectory(t *testing.T) {
 
 func TestSearchTextLimitAbove1000CappedTo1000(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.search_text")
+	tool := findTool(t, cfg, "fs_search_text")
 	// Create a file with 5 matches.
 	path := filepath.Join(cfg.StartupDirectory, "file.txt")
 	content := strings.Repeat("hello\n", 5)
@@ -1757,7 +1757,7 @@ func TestSearchTextLimitAbove1000CappedTo1000(t *testing.T) {
 
 func TestReplaceTextExpectedReplacementsExactMatchSucceeds(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.replace_text")
+	tool := findTool(t, cfg, "fs_replace_text")
 	path := filepath.Join(cfg.StartupDirectory, "file.txt")
 	if err := os.WriteFile(path, []byte("foo bar foo baz\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1786,7 +1786,7 @@ func TestReplaceTextExpectedReplacementsExactMatchSucceeds(t *testing.T) {
 
 func TestMakeDirRejectsNonStringPath(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.make_dir")
+	tool := findTool(t, cfg, "fs_make_dir")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"path": 123,
 	})
@@ -1797,7 +1797,7 @@ func TestMakeDirRejectsNonStringPath(t *testing.T) {
 
 func TestListDirReturnsEntries(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.list_dir")
+	tool := findTool(t, cfg, "fs_list_dir")
 	for _, name := range []string{"a.txt", "b.txt"} {
 		if err := os.WriteFile(filepath.Join(cfg.StartupDirectory, name), []byte(name), 0o644); err != nil {
 			t.Fatal(err)
@@ -1818,7 +1818,7 @@ func TestListDirReturnsEntries(t *testing.T) {
 
 func TestStatPathReturnsDirectoryMetadata(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.stat_path")
+	tool := findTool(t, cfg, "fs_stat_path")
 	subDir := filepath.Join(cfg.StartupDirectory, "subdir")
 	if err := os.MkdirAll(subDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -1836,7 +1836,7 @@ func TestStatPathReturnsDirectoryMetadata(t *testing.T) {
 func TestReadFileRejectsPathOutsideAllowedRootsWhenUnsafeDisabled(t *testing.T) {
 	cfg := newTestConfig(t)
 	// UnsafeAllowAll is false by default in newTestConfig
-	tool := findTool(t, cfg, "fs.read_file")
+	tool := findTool(t, cfg, "fs_read_file")
 	outside := t.TempDir()
 	target := filepath.Join(outside, "secret.txt")
 	if err := os.WriteFile(target, []byte("secret\n"), 0o644); err != nil {
@@ -1852,7 +1852,7 @@ func TestReadFileRejectsPathOutsideAllowedRootsWhenUnsafeDisabled(t *testing.T) 
 
 func TestWriteFileOverwritesExistingFile(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "fs.write_file")
+	tool := findTool(t, cfg, "fs_write_file")
 	path := filepath.Join(cfg.StartupDirectory, "file.txt")
 	if err := os.WriteFile(path, []byte("original\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1876,20 +1876,20 @@ func TestWriteFileOverwritesExistingFile(t *testing.T) {
 func TestReadOnlyFlagMatchesToolSemantics(t *testing.T) {
 	cfg := newTestConfig(t)
 	readOnlyTools := map[string]bool{
-		"fs.read_file":   true,
-		"fs.list_dir":    true,
-		"fs.stat_path":   true,
-		"fs.search_text": true,
-		"fs.pull_file":   true,
+		"fs_read_file":   true,
+		"fs_list_dir":    true,
+		"fs_stat_path":   true,
+		"fs_search_text": true,
+		"fs_pull_file":   true,
 	}
 	writeTools := map[string]bool{
-		"fs.write_file":         false,
-		"fs.make_dir":           false,
-		"fs.move_path":          false,
-		"fs.delete_path":        false,
-		"fs.replace_text":       false,
-		"fs.edit_lines":         false,
-		"fs.apply_unified_diff": false,
+		"fs_write_file":         false,
+		"fs_make_dir":           false,
+		"fs_move_path":          false,
+		"fs_delete_path":        false,
+		"fs_replace_text":       false,
+		"fs_edit_lines":         false,
+		"fs_apply_unified_diff": false,
 	}
 	for _, tool := range NewTools(cfg) {
 		name := tool.Name()
@@ -1913,7 +1913,7 @@ func TestPullFileIssuesRelativeURL(t *testing.T) {
 	if err := os.WriteFile(target, []byte(pngBytes()), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tool := findTool(t, cfg, "fs.pull_file")
+	tool := findTool(t, cfg, "fs_pull_file")
 	result, err := tool.Call(context.Background(), mcp.CallContext{Host: "127.0.0.1:8080"}, map[string]any{"path": "progress.png"})
 	if err != nil {
 		t.Fatalf("pull_file failed: %v", err)
@@ -1947,7 +1947,7 @@ func TestPullFileIssuesAbsoluteURLWithPublicBase(t *testing.T) {
 	if err := os.WriteFile(target, []byte(pngBytes()), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tool := findTool(t, cfg, "fs.pull_file")
+	tool := findTool(t, cfg, "fs_pull_file")
 	result, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "progress.png"})
 	if err != nil {
 		t.Fatalf("pull_file failed: %v", err)
@@ -1965,7 +1965,7 @@ func TestPullFileIssuesAbsoluteURLWithPublicBase(t *testing.T) {
 func TestPullFileDisabled(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.PullFile = config.PullFileConfig{Enabled: false}
-	tool := findTool(t, cfg, "fs.pull_file")
+	tool := findTool(t, cfg, "fs_pull_file")
 	if _, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "x.png"}); err == nil {
 		t.Fatal("expected disabled error")
 	}
@@ -1978,7 +1978,7 @@ func TestPullFileRejectsExtensionWhitelist(t *testing.T) {
 	if err := os.WriteFile(target, []byte(pngBytes()), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tool := findTool(t, cfg, "fs.pull_file")
+	tool := findTool(t, cfg, "fs_pull_file")
 	if _, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "progress.png"}); err == nil {
 		t.Fatal("expected extension rejection")
 	}
@@ -1991,7 +1991,7 @@ func TestPullFileRejectsOversize(t *testing.T) {
 	if err := os.WriteFile(target, []byte(pngBytes()), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tool := findTool(t, cfg, "fs.pull_file")
+	tool := findTool(t, cfg, "fs_pull_file")
 	if _, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "progress.png"}); err == nil {
 		t.Fatal("expected oversize rejection")
 	}
@@ -2004,7 +2004,7 @@ func TestPullFileMaxBytesParamCannotExceedConfig(t *testing.T) {
 	if err := os.WriteFile(target, []byte(pngBytes()), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tool := findTool(t, cfg, "fs.pull_file")
+	tool := findTool(t, cfg, "fs_pull_file")
 	// Caller may not raise the cap: config max_bytes=4 must still reject.
 	if _, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "progress.png", "max_bytes": 1 << 20}); err == nil {
 		t.Fatal("expected oversize rejection despite caller max_bytes")

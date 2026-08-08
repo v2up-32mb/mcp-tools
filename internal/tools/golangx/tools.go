@@ -69,8 +69,8 @@ type navFailure struct {
 
 func NewTools(cfg config.Config) []mcp.Tool {
 	return []mcp.Tool{
-		tool{name: "go.list_symbols", desc: "List top-level symbols declared in one Go source file inside allowed roots. Input is a single .go file path; output includes funcs, methods, types, vars, and consts with source ranges.", schema: schemaListSymbols(), readOnly: true, call: listSymbols(cfg)},
-		tool{name: "go.find_definition", desc: "Resolve the definition for the Go identifier at path + line + column. First version covers package-level declarations, methods, and imported package symbols only. Returns definition location plus a minimal symbol summary; definitions outside allowed roots are marked with in_allowed_roots=false.", schema: schemaFindDefinition(), readOnly: true, call: findDefinition(cfg)},
+		tool{name: "go_list_symbols", desc: "List top-level symbols declared in one Go source file inside allowed roots. Input is a single .go file path; output includes funcs, methods, types, vars, and consts with source ranges.", schema: schemaListSymbols(), readOnly: true, call: listSymbols(cfg)},
+		tool{name: "go_find_definition", desc: "Resolve the definition for the Go identifier at path + line + column. First version covers package-level declarations, methods, and imported package symbols only. Returns definition location plus a minimal symbol summary; definitions outside allowed roots are marked with in_allowed_roots=false.", schema: schemaFindDefinition(), readOnly: true, call: findDefinition(cfg)},
 	}
 }
 

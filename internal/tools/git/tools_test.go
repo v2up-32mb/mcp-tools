@@ -41,7 +41,7 @@ func TestRepoRelativePathsRejectNonArray(t *testing.T) {
 
 func TestGitRequiredPathSchemasDeclareMinItems(t *testing.T) {
 	cfg := config.Config{}
-	for _, toolName := range []string{"git.add", "git.restore"} {
+	for _, toolName := range []string{"git_add", "git_restore"} {
 		tool := findGitTool(t, cfg, toolName)
 		props := tool.Schema()["properties"].(map[string]any)
 		paths := props["paths"].(map[string]any)
@@ -57,8 +57,8 @@ func TestGitRequiredStringSchemasDeclareMinLength(t *testing.T) {
 		toolName string
 		argName  string
 	}{
-		{toolName: "git.commit", argName: "message"},
-		{toolName: "git.switch", argName: "branch"},
+		{toolName: "git_commit", argName: "message"},
+		{toolName: "git_switch", argName: "branch"},
 	}
 	for _, tt := range tests {
 		tool := findGitTool(t, cfg, tt.toolName)
@@ -92,13 +92,13 @@ func TestGitAddRejectsGitPathspecMagic(t *testing.T) {
 	}
 	var tool mcp.Tool
 	for _, candidate := range NewTools(cfg) {
-		if candidate.Name() == "git.add" {
+		if candidate.Name() == "git_add" {
 			tool = candidate
 			break
 		}
 	}
 	if tool == nil {
-		t.Fatal("git.add tool not found")
+		t.Fatal("git_add tool not found")
 	}
 
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
@@ -172,7 +172,7 @@ func TestGitCommitRejectsNonStringMessage(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		GitAllowed:       map[string]bool{"commit": true},
 	}
-	tool := findGitTool(t, cfg, "git.commit")
+	tool := findGitTool(t, cfg, "git_commit")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"repo_path": repoDir,
 		"message":   123,
@@ -191,7 +191,7 @@ func TestGitSwitchRejectsNonStringBranch(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		GitAllowed:       map[string]bool{"switch": true},
 	}
-	tool := findGitTool(t, cfg, "git.switch")
+	tool := findGitTool(t, cfg, "git_switch")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"repo_path": repoDir,
 		"branch":    []any{"main"},
@@ -215,17 +215,17 @@ func TestGitStatusAllowsRepoOutsideAllowedRootsWhenUnsafeAllowAllEnabled(t *test
 	}
 	var tool mcp.Tool
 	for _, candidate := range NewTools(cfg) {
-		if candidate.Name() == "git.status" {
+		if candidate.Name() == "git_status" {
 			tool = candidate
 			break
 		}
 	}
 	if tool == nil {
-		t.Fatal("git.status tool not found")
+		t.Fatal("git_status tool not found")
 	}
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"repo_path": repoDir})
 	if err != nil {
-		t.Fatalf("git.status failed: %v", err)
+		t.Fatalf("git_status failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res)
@@ -274,7 +274,7 @@ func TestGitStatusRejectsUnauthorizedSubcommand(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		GitAllowed:       map[string]bool{"add": true},
 	}
-	tool := findGitTool(t, cfg, "git.status")
+	tool := findGitTool(t, cfg, "git_status")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"repo_path": repoDir,
 	})
@@ -330,13 +330,13 @@ func TestGitCommitHappyPath(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		GitAllowed:       map[string]bool{"commit": true},
 	}
-	tool := findGitTool(t, cfg, "git.commit")
+	tool := findGitTool(t, cfg, "git_commit")
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"repo_path": repoDir,
 		"message":   "init",
 	})
 	if err != nil {
-		t.Fatalf("git.commit failed: %v", err)
+		t.Fatalf("git_commit failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res)
@@ -385,13 +385,13 @@ func TestGitSwitchHappyPath(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		GitAllowed:       map[string]bool{"switch": true},
 	}
-	tool := findGitTool(t, cfg, "git.switch")
+	tool := findGitTool(t, cfg, "git_switch")
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"repo_path": repoDir,
 		"branch":    "new-branch",
 	})
 	if err != nil {
-		t.Fatalf("git.switch failed: %v", err)
+		t.Fatalf("git_switch failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res)
@@ -444,12 +444,12 @@ func TestGitLogDefaultLimitReturns20CapButShowsAllCommits(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		GitAllowed:       map[string]bool{"log": true},
 	}
-	tool := findGitTool(t, cfg, "git.log")
+	tool := findGitTool(t, cfg, "git_log")
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"repo_path": repoDir,
 	})
 	if err != nil {
-		t.Fatalf("git.log failed: %v", err)
+		t.Fatalf("git_log failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res)
@@ -489,12 +489,12 @@ func TestGitOutputMaxBytesTruncation(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		GitAllowed:       map[string]bool{"status": true},
 	}
-	tool := findGitTool(t, cfg, "git.status")
+	tool := findGitTool(t, cfg, "git_status")
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"repo_path": repoDir,
 	})
 	if err != nil {
-		t.Fatalf("git.status failed: %v", err)
+		t.Fatalf("git_status failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res)
@@ -524,7 +524,7 @@ func TestGitAddRejectsEmptyPaths(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		GitAllowed:       map[string]bool{"add": true},
 	}
-	tool := findGitTool(t, cfg, "git.add")
+	tool := findGitTool(t, cfg, "git_add")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"repo_path": repoDir,
 	})
@@ -556,7 +556,7 @@ func TestGitCommitNothingToCommitFailsGracefully(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		GitAllowed:       map[string]bool{"commit": true},
 	}
-	tool := findGitTool(t, cfg, "git.commit")
+	tool := findGitTool(t, cfg, "git_commit")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"repo_path": repoDir,
 		"message":   "empty",
@@ -578,13 +578,13 @@ func TestGitAddAddsFilesInRepo(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		GitAllowed:       map[string]bool{"add": true},
 	}
-	tool := findGitTool(t, cfg, "git.add")
+	tool := findGitTool(t, cfg, "git_add")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"repo_path": repoDir,
 		"paths":     []any{"test.txt"},
 	})
 	if err != nil {
-		t.Fatalf("git.add failed: %v", err)
+		t.Fatalf("git_add failed: %v", err)
 	}
 	verifyCmd := exec.Command("git", "diff", "--cached", "--name-only")
 	verifyCmd.Dir = repoDir
@@ -636,13 +636,13 @@ func TestGitRestoreRestoresModifiedFile(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		GitAllowed:       map[string]bool{"restore": true},
 	}
-	tool := findGitTool(t, cfg, "git.restore")
+	tool := findGitTool(t, cfg, "git_restore")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"repo_path": repoDir,
 		"paths":     []any{"a.txt"},
 	})
 	if err != nil {
-		t.Fatalf("git.restore failed: %v", err)
+		t.Fatalf("git_restore failed: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(repoDir, "a.txt"))
 	if err != nil {
@@ -679,7 +679,7 @@ func TestGitAddRejectsTraversalPath(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		GitAllowed:       map[string]bool{"add": true},
 	}
-	tool := findGitTool(t, cfg, "git.add")
+	tool := findGitTool(t, cfg, "git_add")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"repo_path": repoDir,
 		"paths":     []any{"../outside"},
@@ -730,7 +730,7 @@ func TestGitAddRejectsPathspecMagicBang(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		GitAllowed:       map[string]bool{"add": true},
 	}
-	tool := findGitTool(t, cfg, "git.add")
+	tool := findGitTool(t, cfg, "git_add")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"repo_path": repoDir,
 		"paths":     []any{"!test.txt"},
@@ -777,12 +777,12 @@ func TestGitDiffHappyPath(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		GitAllowed:       map[string]bool{"diff": true},
 	}
-	tool := findGitTool(t, cfg, "git.diff")
+	tool := findGitTool(t, cfg, "git_diff")
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"repo_path": repoDir,
 	})
 	if err != nil {
-		t.Fatalf("git.diff failed: %v", err)
+		t.Fatalf("git_diff failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res)
@@ -809,12 +809,12 @@ func TestGitStatusHappyPath(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		GitAllowed:       map[string]bool{"status": true},
 	}
-	tool := findGitTool(t, cfg, "git.status")
+	tool := findGitTool(t, cfg, "git_status")
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"repo_path": repoDir,
 	})
 	if err != nil {
-		t.Fatalf("git.status failed: %v", err)
+		t.Fatalf("git_status failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res)

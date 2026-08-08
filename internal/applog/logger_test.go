@@ -24,7 +24,7 @@ func TestLoggerFormatsBlockWithOrderedFields(t *testing.T) {
 	logger.now = func() time.Time { return time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC) }
 
 	logger.Info("mcp.tool", "tool call completed",
-		Field{Key: "tool", Value: "fs.apply_unified_diff"},
+		Field{Key: "tool", Value: "fs_apply_unified_diff"},
 		Field{Key: "target_path", Value: "/tmp/demo.go"},
 		Field{Key: "diff_hunks", Value: 3},
 		Field{Key: "duration_ms", Value: 12},
@@ -38,7 +38,7 @@ func TestLoggerFormatsBlockWithOrderedFields(t *testing.T) {
 		t.Fatalf("missing message: %q", got)
 	}
 	order := []string{
-		"\n  tool: fs.apply_unified_diff",
+		"\n  tool: fs_apply_unified_diff",
 		"\n  target_path: /tmp/demo.go",
 		"\n  diff_hunks: 3",
 		"\n  duration_ms: 12",
@@ -62,7 +62,7 @@ func TestLoggerFormatsErrorBlock(t *testing.T) {
 	logger.now = func() time.Time { return time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC) }
 
 	logger.Error("mcp.tool", "tool call failed",
-		Field{Key: "tool", Value: "exec.run"},
+		Field{Key: "tool", Value: "exec_run"},
 		Field{Key: "request_id", Value: "req-1"},
 		Field{Key: "session_id", Value: "sess-1"},
 		Field{Key: "error", Value: "exec go_test failed"},

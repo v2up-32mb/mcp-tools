@@ -175,7 +175,7 @@ func TestSSEAsyncQueueFullFallbackDoesNotExecuteToolTwice(t *testing.T) {
 		"id":      77,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "fs.edit_lines",
+			"name": "fs_edit_lines",
 			"arguments": map[string]any{
 				"path":              target,
 				"start_line":        1,
@@ -269,7 +269,7 @@ func TestStatezShowsRuntimeCountsAndCounters(t *testing.T) {
 		"id":      903,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "fs.write_file",
+			"name": "fs_write_file",
 			"arguments": map[string]any{
 				"path": target,
 				"text": "after\n",
@@ -571,7 +571,7 @@ func TestEditLinesAndAudit(t *testing.T) {
 		"id":      3,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "fs.edit_lines",
+			"name": "fs_edit_lines",
 			"arguments": map[string]any{
 				"path":       target,
 				"start_line": 2,
@@ -602,7 +602,7 @@ func TestEditLinesAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(auditPayload, []byte("fs.edit_lines")) {
+	if !bytes.Contains(auditPayload, []byte("fs_edit_lines")) {
 		t.Fatalf("missing audit entry: %s", auditPayload)
 	}
 }
@@ -630,7 +630,7 @@ func TestApplyUnifiedDiffAndAudit(t *testing.T) {
 		"id":      301,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "fs.apply_unified_diff",
+			"name": "fs_apply_unified_diff",
 			"arguments": map[string]any{
 				"path": "apply.txt",
 				"diff": diff,
@@ -659,7 +659,7 @@ func TestApplyUnifiedDiffAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(auditPayload, []byte("fs.apply_unified_diff")) {
+	if !bytes.Contains(auditPayload, []byte("fs_apply_unified_diff")) {
 		t.Fatalf("missing audit entry: %s", auditPayload)
 	}
 }
@@ -687,7 +687,7 @@ func TestApplyUnifiedDiffReturnsStructuredConflictResult(t *testing.T) {
 		"id":      302,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "fs.apply_unified_diff",
+			"name": "fs_apply_unified_diff",
 			"arguments": map[string]any{
 				"path": "apply-conflict.txt",
 				"diff": diff,
@@ -1887,7 +1887,7 @@ func TestPathEscapeRejectedAsToolError(t *testing.T) {
 		"id":      11,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "fs.read_file",
+			"name": "fs_read_file",
 			"arguments": map[string]any{
 				"path": outside,
 			},
@@ -2537,7 +2537,7 @@ func TestStatezIncludesTemplateMetadataAndCounters(t *testing.T) {
 		"id":      999,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "exec.run_template",
+			"name": "exec_run_template",
 			"arguments": map[string]any{
 				"template": "gomod",
 				"workdir":  ".",
@@ -2613,7 +2613,7 @@ func TestStatezCountsTemplateConfirmationBlocked(t *testing.T) {
 		"id":      1001,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "exec.run_template",
+			"name": "exec_run_template",
 			"arguments": map[string]any{
 				"template": "cleanup",
 				"workdir":  ".",
@@ -2672,7 +2672,7 @@ func TestTemplateMetricsDoNotCountUnrelatedErrorsAsConfirmationBlocked(t *testin
 		metrics: newServerMetrics(),
 	}
 
-	srv.trackTemplateCall("exec.run_template", map[string]any{
+	srv.trackTemplateCall("exec_run_template", map[string]any{
 		"template": "cleanup",
 	}, mcp.ErrorResult("workdir not allowed for template", mcp.AuditData{}))
 
@@ -2710,7 +2710,7 @@ func TestAsyncSSETemplateCallUpdatesTemplateMetrics(t *testing.T) {
 		"id":      2002,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "exec.run_template",
+			"name": "exec_run_template",
 			"arguments": map[string]any{
 				"template": "cleanup",
 				"workdir":  ".",

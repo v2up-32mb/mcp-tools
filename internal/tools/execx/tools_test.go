@@ -61,14 +61,14 @@ func TestRunPresetAppendsDefaultTargetWhenOnlyFlagsProvided(t *testing.T) {
 			},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"preset":  "go_test",
 		"workdir": ".",
 		"args":    []any{"-v"},
 	})
 	if err != nil {
-		t.Fatalf("exec.run failed: %v", err)
+		t.Fatalf("exec_run failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res)
@@ -126,7 +126,7 @@ func TestSchemasDeclarePositiveTimeoutOverride(t *testing.T) {
 	cfg := config.Config{CommandTemplates: map[string]config.CommandTemplate{
 		"make_test": {Command: []string{"make", "test"}, Timeout: time.Second},
 	}}
-	for _, toolName := range []string{"exec.run", "exec.run_template"} {
+	for _, toolName := range []string{"exec_run", "exec_run_template"} {
 		tool := findTool(t, cfg, toolName)
 		props := tool.Schema()["properties"].(map[string]any)
 		timeoutProp := props["timeout_override_sec"].(map[string]any)
@@ -144,10 +144,10 @@ func TestExecSchemasDeclareStringMinLength(t *testing.T) {
 		toolName string
 		propName string
 	}{
-		{toolName: "exec.run", propName: "command"},
-		{toolName: "exec.run", propName: "workdir"},
-		{toolName: "exec.run_template", propName: "template"},
-		{toolName: "exec.run_template", propName: "workdir"},
+		{toolName: "exec_run", propName: "command"},
+		{toolName: "exec_run", propName: "workdir"},
+		{toolName: "exec_run_template", propName: "template"},
+		{toolName: "exec_run_template", propName: "workdir"},
 	}
 	for _, tt := range tests {
 		tool := findTool(t, cfg, tt.toolName)
@@ -180,7 +180,7 @@ func TestRawCommandRejectsNonPositiveTimeoutOverrideBeforeExecution(t *testing.T
 		CommandTimeout:   5 * time.Second,
 		UnsafeAllowAll:   true,
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"command":              "sh",
 		"args":                 []any{"-c", "printf ran > marker.txt"},
@@ -215,7 +215,7 @@ func TestExecRunRejectsNonStringCommandBeforePresetFallback(t *testing.T) {
 			},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"command": []any{"sh"},
 		"preset":  "mark",
@@ -242,7 +242,7 @@ func TestExecRunRejectsNonStringWorkdirBeforeExecution(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		UnsafeAllowAll:   true,
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"command": "sh",
 		"args":    []any{"-c", "printf ran > marker.txt"},
@@ -275,7 +275,7 @@ func TestExecRunRejectsRawCommandWhenUnsafeDisabledBeforePresetFallback(t *testi
 			},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"command": "sh",
 		"preset":  "mark",
@@ -396,7 +396,7 @@ func TestRunPresetRejectsInlinePathFlagThroughSymlinkOutsideWorkdir(t *testing.T
 			},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"preset":  "cover",
 		"workdir": ".",
@@ -426,7 +426,7 @@ func TestRunPresetRejectsSeparatePathFlagThroughSymlinkOutsideWorkdir(t *testing
 			},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"preset":  "cover",
 		"workdir": ".",
@@ -455,7 +455,7 @@ func TestRunPresetRejectsPositionalTargetThroughSymlinkOutsideWorkdir(t *testing
 			},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"preset":  "go_test",
 		"workdir": ".",
@@ -484,7 +484,7 @@ func TestRunPresetRejectsGoGetLocalTargetThroughSymlinkOutsideWorkdir(t *testing
 			},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"preset":  "go_get",
 		"workdir": ".",
@@ -576,13 +576,13 @@ func TestRunPresetInjectsConfiguredEnvAndCreatesCacheDirs(t *testing.T) {
 			},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"preset":  "go_env_cache",
 		"workdir": ".",
 	})
 	if err != nil {
-		t.Fatalf("exec.run failed: %v", err)
+		t.Fatalf("exec_run failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res)
@@ -668,7 +668,7 @@ func TestExecRunAllowsRawCommandOutsideAllowedRootsWhenUnsafeAllowAllEnabled(t *
 		CommandTimeout:   5 * time.Second,
 		UnsafeAllowAll:   true,
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"command": "sh",
 		"args":    []any{"-c", "printf %s \"$MCP_YOLO_TEST\""},
@@ -678,7 +678,7 @@ func TestExecRunAllowsRawCommandOutsideAllowedRootsWhenUnsafeAllowAllEnabled(t *
 		"workdir": workdir,
 	})
 	if err != nil {
-		t.Fatalf("exec.run raw command failed: %v", err)
+		t.Fatalf("exec_run raw command failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res)
@@ -705,7 +705,7 @@ func TestRawCommandRejectsNonStringArgs(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		UnsafeAllowAll:   true,
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"command": "echo",
 		"args":    []any{123},
@@ -729,7 +729,7 @@ func TestRawCommandRejectsNonStringEnvValue(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		UnsafeAllowAll:   true,
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"command": "echo",
 		"env":     map[string]any{"K": 123},
@@ -773,13 +773,13 @@ func TestRunTemplateAllowsRelativeAllowedWorkdirs(t *testing.T) {
 			},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run_template")
+	tool := findTool(t, cfg, "exec_run_template")
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"template": "print_ok",
 		"workdir":  "sub",
 	})
 	if err != nil {
-		t.Fatalf("exec.run_template relative allowed_workdirs failed: %v", err)
+		t.Fatalf("exec_run_template relative allowed_workdirs failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res)
@@ -798,7 +798,7 @@ func TestExecRunRequiresPresetWhenNoCommandOrPreset(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		UnsafeAllowAll:   true,
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"workdir": ".",
 	})
@@ -819,7 +819,7 @@ func TestRawCommandRejectedWhenUnsafeAllowAllDisabled(t *testing.T) {
 		OutputMaxBytes:   4096,
 		CommandTimeout:   5 * time.Second,
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"command": "echo",
 		"workdir": workdir,
@@ -840,7 +840,7 @@ func TestExecRunRejectsUnknownPreset(t *testing.T) {
 		OutputMaxBytes:   4096,
 		CommandTimeout:   5 * time.Second,
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"preset":  "nonexistent_preset",
 		"workdir": ".",
@@ -863,7 +863,7 @@ func TestExecRunRejectsEmptyCommand(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		UnsafeAllowAll:   true,
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"command": "   ",
 		"workdir": workdir,
@@ -893,7 +893,7 @@ func TestExecRunRejectsNonExistentWorkdir(t *testing.T) {
 			},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"preset":  "go_test",
 		"workdir": missing,
@@ -916,14 +916,14 @@ func TestRawCommandExecutesWithEmptyArgs(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		UnsafeAllowAll:   true,
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"command": "true",
 		"args":    []any{},
 		"workdir": workdir,
 	})
 	if err != nil {
-		t.Fatalf("exec.run raw command with empty args failed: %v", err)
+		t.Fatalf("exec_run raw command with empty args failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res)
@@ -942,7 +942,7 @@ func TestRunTemplateRejectsNonExistentTemplate(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		CommandTemplates: map[string]config.CommandTemplate{},
 	}
-	tool := findTool(t, cfg, "exec.run_template")
+	tool := findTool(t, cfg, "exec_run_template")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"template": "nonexistent_template",
 		"workdir":  ".",
@@ -972,7 +972,7 @@ func TestExecRunRejectsWorkdirOutsideAllowedRoots(t *testing.T) {
 			},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"preset":  "go_test",
 		"workdir": outside,
@@ -1001,7 +1001,7 @@ func TestExecRunRejectsNonStringWorkdir(t *testing.T) {
 			},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"preset":  "go_test",
 		"workdir": 123,
@@ -1030,7 +1030,7 @@ func TestExecRunRejectsMissingWorkdir(t *testing.T) {
 			},
 		},
 	}
-	tool := findTool(t, cfg, "exec.run")
+	tool := findTool(t, cfg, "exec_run")
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
 		"preset": "go_test",
 	})

@@ -103,14 +103,14 @@ func TestRegistryAuditSummarizesSensitiveArguments(t *testing.T) {
 	logger := &captureLogger{}
 	registry := NewRegistry(logger)
 	registry.Register(staticTool{
-		name: "exec.run",
+		name: "exec_run",
 		result: TextResult("ok", map[string]any{"summary": "ok"}, AuditData{
 			Allowed:      true,
 			ResultDigest: "ok",
 		}),
 	})
 
-	_, err := registry.Call(context.Background(), CallContext{}, "exec.run", map[string]any{
+	_, err := registry.Call(context.Background(), CallContext{}, "exec_run", map[string]any{
 		"command": "sh",
 		"args":    []any{"-c", "printf %s \"$SECRET\""},
 		"env": map[string]any{
@@ -150,7 +150,7 @@ func TestRegistryLogsToolCallInfoSummary(t *testing.T) {
 	logger := &captureLogger{}
 	registry := NewRegistry(logger)
 	registry.Register(staticTool{
-		name: "fs.apply_unified_diff",
+		name: "fs_apply_unified_diff",
 		result: TextResult("ok", map[string]any{"summary": "updated file"}, AuditData{
 			Allowed:      true,
 			TargetPath:   "/tmp/demo.go",
@@ -162,7 +162,7 @@ func TestRegistryLogsToolCallInfoSummary(t *testing.T) {
 		RequestID:  "req-1",
 		SessionID:  "sess-1",
 		RemoteAddr: "127.0.0.1",
-	}, "fs.apply_unified_diff", map[string]any{
+	}, "fs_apply_unified_diff", map[string]any{
 		"path": "/tmp/demo.go",
 		"diff": "@@ -1 +1 @@\n-old\n+new\n",
 	})
@@ -173,7 +173,7 @@ func TestRegistryLogsToolCallInfoSummary(t *testing.T) {
 	logs := buf.String()
 	for _, needle := range []string{
 		"tool call completed",
-		"tool: fs.apply_unified_diff",
+		"tool: fs_apply_unified_diff",
 		"path: /tmp/demo.go",
 		"diff_hunks: 1",
 		"result_digest: updated file",
@@ -196,7 +196,7 @@ func TestRegistryLogsToolCallErrorWithRequestAndSession(t *testing.T) {
 	logger := &captureLogger{}
 	registry := NewRegistry(logger)
 	registry.Register(staticTool{
-		name: "exec.run",
+		name: "exec_run",
 		err:  WrapToolError(errors.New("exec go_test failed"), AuditData{Allowed: true, Workdir: "/tmp/project", ResultDigest: "exec failure"}),
 	})
 
@@ -204,7 +204,7 @@ func TestRegistryLogsToolCallErrorWithRequestAndSession(t *testing.T) {
 		RequestID:  "req-2",
 		SessionID:  "sess-2",
 		RemoteAddr: "127.0.0.1",
-	}, "exec.run", map[string]any{
+	}, "exec_run", map[string]any{
 		"preset":  "go_test",
 		"workdir": "/tmp/project",
 		"args":    []any{"-run", "TestOne"},
@@ -216,7 +216,7 @@ func TestRegistryLogsToolCallErrorWithRequestAndSession(t *testing.T) {
 	logs := buf.String()
 	for _, needle := range []string{
 		"tool call failed",
-		"tool: exec.run",
+		"tool: exec_run",
 		"preset: go_test",
 		"workdir: /tmp/project",
 		"args_count: 2",
@@ -231,14 +231,14 @@ func TestRegistryLogsToolCallErrorWithRequestAndSession(t *testing.T) {
 }
 
 func TestSummarizeToolFieldsCountsTypedStringSlices(t *testing.T) {
-	execFields := summarizeToolFields("exec.run", map[string]any{
+	execFields := summarizeToolFields("exec_run", map[string]any{
 		"args": []string{"-run", "TestOne"},
 	})
 	if got, ok := fieldValue(execFields, "args_count").(int); !ok || got != 2 {
 		t.Fatalf("expected args_count=2 for []string, got %#v", fieldValue(execFields, "args_count"))
 	}
 
-	gitFields := summarizeToolFields("git.diff", map[string]any{
+	gitFields := summarizeToolFields("git_diff", map[string]any{
 		"paths": []string{"internal/mcp/mcp.go", "internal/mcp/mcp_test.go"},
 	})
 	if got, ok := fieldValue(gitFields, "paths_count").(int); !ok || got != 2 {
@@ -276,14 +276,14 @@ func TestSafeLogIntRejectsNonIntegralAndOutOfRangeValues(t *testing.T) {
 func TestRegistryListFormatsToolEntry(t *testing.T) {
 	logger := &captureLogger{}
 	registry := NewRegistry(logger)
-	registry.Register(staticTool{name: "fs.read_file", result: TextResult("ok", nil, AuditData{Allowed: true, ResultDigest: "ok"})})
+	registry.Register(staticTool{name: "fs_read_file", result: TextResult("ok", nil, AuditData{Allowed: true, ResultDigest: "ok"})})
 
 	tools := registry.List()
 	if len(tools) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(tools))
 	}
 	entry := tools[0]
-	if entry["name"] != "fs.read_file" {
+	if entry["name"] != "fs_read_file" {
 		t.Fatalf("unexpected name: %#v", entry["name"])
 	}
 	title, ok := entry["title"].(string)

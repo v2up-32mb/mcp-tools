@@ -100,7 +100,7 @@ func run() error {
 	if cfg.UnsafeAllowAll {
 		applog.Default().Warn("mcp.server", "!! WARNING: unsafe_allow_all is enabled !!")
 		applog.Default().Warn("mcp.server", "All path, workdir, git, and exec restrictions are BYPASSED for authorized clients.")
-		applog.Default().Warn("mcp.server", "exec.run can execute arbitrary commands. Set unsafe_allow_all=false or MCP_UNSAFE_ALLOW_ALL=false to restore restrictions.")
+		applog.Default().Warn("mcp.server", "exec_run can execute arbitrary commands. Set unsafe_allow_all=false or MCP_UNSAFE_ALLOW_ALL=false to restore restrictions.")
 	}
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err

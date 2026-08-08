@@ -1,4 +1,4 @@
-// Package pullfile implements the fs.pull_file download-link service.
+// Package pullfile implements the fs_pull_file download-link service.
 //
 // The manager issues short-lived, download-count-limited signed URLs for
 // files inside the allowed roots. The URL itself is the only credential:
@@ -220,7 +220,7 @@ func (m *Manager) RecordDownload(started time.Time, remoteAddr, targetPath, deta
 	ev := audit.Event{
 		Timestamp:  started.UTC(),
 		RemoteAddr: remoteAddr,
-		Tool:       "fs.pull_file.download",
+		Tool:       "fs_pull_file.download",
 		TargetPath: targetPath,
 		Allowed:    ok,
 		Success:    ok,

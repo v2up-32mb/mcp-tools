@@ -34,7 +34,7 @@ func TestJSONLWriterRotatesWhenMaxSizeExceeded(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "mcp-audit.jsonl")
 
-	first := Event{Timestamp: time.Unix(1, 0).UTC(), Tool: "fs.read_file", Allowed: true, Success: true, ResultDigest: "first"}
+	first := Event{Timestamp: time.Unix(1, 0).UTC(), Tool: "fs_read_file", Allowed: true, Success: true, ResultDigest: "first"}
 	payload := mustJSONL(t, first)
 	writer, err := NewJSONLWriterWithOptions(path, RotateOptions{
 		MaxSizeBytes: int64(len(payload) + 10),
@@ -48,7 +48,7 @@ func TestJSONLWriterRotatesWhenMaxSizeExceeded(t *testing.T) {
 	if err := writer.Write(first); err != nil {
 		t.Fatalf("first write error: %v", err)
 	}
-	second := Event{Timestamp: time.Unix(2, 0).UTC(), Tool: "fs.write_file", Allowed: true, Success: true, ResultDigest: "second"}
+	second := Event{Timestamp: time.Unix(2, 0).UTC(), Tool: "fs_write_file", Allowed: true, Success: true, ResultDigest: "second"}
 	if err := writer.Write(second); err != nil {
 		t.Fatalf("second write error: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestJSONLWriterHandlesSingleRecordLargerThanMaxSize(t *testing.T) {
 	}
 	defer writer.Close()
 
-	ev := Event{Timestamp: time.Unix(1, 0).UTC(), Tool: "fs.read_file", Allowed: true, Success: true, ResultDigest: "ok"}
+	ev := Event{Timestamp: time.Unix(1, 0).UTC(), Tool: "fs_read_file", Allowed: true, Success: true, ResultDigest: "ok"}
 	if err := writer.Write(ev); err != nil {
 		t.Fatalf("write oversized record error: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestJSONLWriterHandlesSingleRecordLargerThanMaxSize(t *testing.T) {
 	}
 
 	// A second write triggers another rotation; both records survive.
-	second := Event{Timestamp: time.Unix(2, 0).UTC(), Tool: "fs.write_file", Allowed: true, Success: true, ResultDigest: "second"}
+	second := Event{Timestamp: time.Unix(2, 0).UTC(), Tool: "fs_write_file", Allowed: true, Success: true, ResultDigest: "second"}
 	if err := writer.Write(second); err != nil {
 		t.Fatalf("second write error: %v", err)
 	}

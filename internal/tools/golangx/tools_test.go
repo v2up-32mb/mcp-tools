@@ -39,12 +39,12 @@ func findTool(t *testing.T, cfg config.Config, name string) mcp.Tool {
 
 func TestFindDefinitionSchemaDeclaresPositiveLineAndColumn(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "go.find_definition")
+	tool := findTool(t, cfg, "go_find_definition")
 	props := tool.Schema()["properties"].(map[string]any)
 	for _, name := range []string{"line", "column"} {
 		prop := props[name].(map[string]any)
 		if got, ok := prop["minimum"].(int); !ok || got != 1 {
-			t.Fatalf("go.find_definition schema should declare %s minimum=1, got %#v", name, prop)
+			t.Fatalf("go_find_definition schema should declare %s minimum=1, got %#v", name, prop)
 		}
 	}
 }
@@ -81,7 +81,7 @@ func lineColumnOf(t *testing.T, content string, needle string) (int, int) {
 
 func TestListSymbolsReturnsTopLevelDeclarations(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "go.list_symbols")
+	tool := findTool(t, cfg, "go_list_symbols")
 	writeModuleFile(t, cfg.StartupDirectory, "go.mod", "module example.com/navtest\n\ngo 1.20\n")
 	writeModuleFile(t, cfg.StartupDirectory, "sample.go", `package sample
 
@@ -98,7 +98,7 @@ func (s *Service) Do() {}
 
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "sample.go"})
 	if err != nil {
-		t.Fatalf("go.list_symbols failed: %v", err)
+		t.Fatalf("go_list_symbols failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res.StructuredContent)
@@ -124,7 +124,7 @@ func (s *Service) Do() {}
 
 func TestListSymbolsRejectsNonGoFile(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "go.list_symbols")
+	tool := findTool(t, cfg, "go_list_symbols")
 	writeModuleFile(t, cfg.StartupDirectory, "notes.txt", "hello")
 
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "notes.txt"})
@@ -149,12 +149,12 @@ func TestGoToolsRejectNonStringPath(t *testing.T) {
 	}{
 		{
 			name: "list symbols",
-			tool: "go.list_symbols",
+			tool: "go_list_symbols",
 			args: map[string]any{"path": []any{"sample.go"}},
 		},
 		{
 			name: "find definition",
-			tool: "go.find_definition",
+			tool: "go_find_definition",
 			args: map[string]any{"path": 123, "line": 1, "column": 1},
 		},
 	}
@@ -182,7 +182,7 @@ func TestGoToolsRejectNonStringPath(t *testing.T) {
 
 func TestFindDefinitionResolvesSamePackageOtherFile(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "go.find_definition")
+	tool := findTool(t, cfg, "go_find_definition")
 	writeModuleFile(t, cfg.StartupDirectory, "go.mod", "module example.com/navtest\n\ngo 1.20\n")
 	helper := writeModuleFile(t, cfg.StartupDirectory, "helper.go", `package sample
 
@@ -203,7 +203,7 @@ func Use() {
 		"column": column,
 	})
 	if err != nil {
-		t.Fatalf("go.find_definition failed: %v", err)
+		t.Fatalf("go_find_definition failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res.StructuredContent)
@@ -221,7 +221,7 @@ func Use() {
 
 func TestFindDefinitionRejectsFractionalPosition(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "go.find_definition")
+	tool := findTool(t, cfg, "go_find_definition")
 	writeModuleFile(t, cfg.StartupDirectory, "go.mod", "module example.com/navtest\n\ngo 1.20\n")
 	writeModuleFile(t, cfg.StartupDirectory, "sample.go", "package sample\n\nfunc Use() {}\n")
 
@@ -255,7 +255,7 @@ func TestFindDefinitionRejectsFractionalPosition(t *testing.T) {
 
 func TestFindDefinitionRejectsNonIntegerPositionWithValidationReason(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "go.find_definition")
+	tool := findTool(t, cfg, "go_find_definition")
 	writeModuleFile(t, cfg.StartupDirectory, "sample.go", "package sample\n\nfunc Use() {}\n")
 
 	tests := []struct {
@@ -305,7 +305,7 @@ func TestFindDefinitionRejectsNonIntegerPositionWithValidationReason(t *testing.
 
 func TestFindDefinitionReturnsExternalLocationMarkedOutsideAllowedRoots(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "go.find_definition")
+	tool := findTool(t, cfg, "go_find_definition")
 	writeModuleFile(t, cfg.StartupDirectory, "go.mod", "module example.com/navtest\n\ngo 1.20\n")
 	content := `package sample
 
@@ -324,7 +324,7 @@ func Use() {
 		"column": column,
 	})
 	if err != nil {
-		t.Fatalf("go.find_definition failed: %v", err)
+		t.Fatalf("go_find_definition failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res.StructuredContent)
@@ -343,7 +343,7 @@ func Use() {
 
 func TestFindDefinitionRejectsOutOfBoundsPosition(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "go.find_definition")
+	tool := findTool(t, cfg, "go_find_definition")
 	writeModuleFile(t, cfg.StartupDirectory, "go.mod", "module example.com/navtest\n\ngo 1.20\n")
 	writeModuleFile(t, cfg.StartupDirectory, "main.go", `package sample
 
@@ -369,7 +369,7 @@ func Use() {}
 
 func TestFindDefinitionRejectsLocalVariableTargets(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "go.find_definition")
+	tool := findTool(t, cfg, "go_find_definition")
 	writeModuleFile(t, cfg.StartupDirectory, "go.mod", "module example.com/navtest\n\ngo 1.20\n")
 	content := `package sample
 
@@ -400,7 +400,7 @@ func Use() {
 
 func TestFindDefinitionRejectsNonIdentifierPosition(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "go.find_definition")
+	tool := findTool(t, cfg, "go_find_definition")
 	writeModuleFile(t, cfg.StartupDirectory, "go.mod", "module example.com/navtest\n\ngo 1.20\n")
 	content := `package sample
 
@@ -431,7 +431,7 @@ func Helper() {}
 
 func TestFindDefinitionRejectsPositionImmediatelyAfterIdentifier(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "go.find_definition")
+	tool := findTool(t, cfg, "go_find_definition")
 	writeModuleFile(t, cfg.StartupDirectory, "go.mod", "module example.com/navtest\n\ngo 1.20\n")
 	content := `package sample
 
@@ -463,7 +463,7 @@ func Helper() {}
 
 func TestFindDefinitionRejectsNonGoFile(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "go.find_definition")
+	tool := findTool(t, cfg, "go_find_definition")
 	writeModuleFile(t, cfg.StartupDirectory, "test.txt", "hello")
 
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
@@ -488,7 +488,7 @@ func TestFindDefinitionRejectsNonGoFile(t *testing.T) {
 
 func TestFindDefinitionRejectsColumnOutOfBounds(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "go.find_definition")
+	tool := findTool(t, cfg, "go_find_definition")
 	writeModuleFile(t, cfg.StartupDirectory, "go.mod", "module example.com/navtest\n\ngo 1.20\n")
 	writeModuleFile(t, cfg.StartupDirectory, "main.go", "package sample\n\nfunc Use() {}\n")
 
@@ -514,7 +514,7 @@ func TestFindDefinitionRejectsColumnOutOfBounds(t *testing.T) {
 
 func TestFindDefinitionRejectsLineZero(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "go.find_definition")
+	tool := findTool(t, cfg, "go_find_definition")
 	writeModuleFile(t, cfg.StartupDirectory, "main.go", "package sample\n\nfunc Use() {}\n")
 
 	_, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
@@ -539,13 +539,13 @@ func TestFindDefinitionRejectsLineZero(t *testing.T) {
 
 func TestListSymbolsReturnsEmptyForPackageOnlyFile(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "go.list_symbols")
+	tool := findTool(t, cfg, "go_list_symbols")
 	writeModuleFile(t, cfg.StartupDirectory, "go.mod", "module example.com/navtest\n\ngo 1.20\n")
 	writeModuleFile(t, cfg.StartupDirectory, "empty.go", "package empty\n")
 
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "empty.go"})
 	if err != nil {
-		t.Fatalf("go.list_symbols failed: %v", err)
+		t.Fatalf("go_list_symbols failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res.StructuredContent)
@@ -565,13 +565,13 @@ func TestListSymbolsReturnsEmptyForPackageOnlyFile(t *testing.T) {
 
 func TestListSymbolsPopulatesPositionFields(t *testing.T) {
 	cfg := newTestConfig(t)
-	tool := findTool(t, cfg, "go.list_symbols")
+	tool := findTool(t, cfg, "go_list_symbols")
 	writeModuleFile(t, cfg.StartupDirectory, "go.mod", "module example.com/navtest\n\ngo 1.20\n")
 	writeModuleFile(t, cfg.StartupDirectory, "sample.go", "package sample\n\nfunc foo() {}\n")
 
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": "sample.go"})
 	if err != nil {
-		t.Fatalf("go.list_symbols failed: %v", err)
+		t.Fatalf("go_list_symbols failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res.StructuredContent)
@@ -607,10 +607,10 @@ func TestGolangxPathRelaxedUnderUnsafeAllowAll(t *testing.T) {
 		CommandTimeout:   5 * time.Second,
 		UnsafeAllowAll:   true,
 	}
-	tool := findTool(t, cfg, "go.list_symbols")
+	tool := findTool(t, cfg, "go_list_symbols")
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{"path": goPath})
 	if err != nil {
-		t.Fatalf("go.list_symbols under UnsafeAllowAll failed: %v", err)
+		t.Fatalf("go_list_symbols under UnsafeAllowAll failed: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("unexpected error result: %#v", res.StructuredContent)

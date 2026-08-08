@@ -6,7 +6,7 @@
 >
 > 本仓库默认配置 `unsafe_allow_all: true`，启用后：
 > - `fs.*` 工具可访问 `allowed_roots` 之外的任意文件路径
-> - `exec.run` 可执行任意 `command + args + env`（不再限于 Go preset）
+> - `exec_run` 可执行任意 `command + args + env`（不再限于 Go preset）
 > - `git.*` 的 `repo_path` 可以指向任意 Git 仓库
 > - 模板的 `requires_confirmation` 和 `allowed_workdirs` 限制被旁路
 >
@@ -50,37 +50,37 @@ unsafe_allow_all: true
   - 当某个 session 已有活动 SSE stream 时，后续 `POST /mcp` + `Accept: text/event-stream` 会把结果**异步投递**到该 stream，并返回 `202 Accepted`
   - 异步投递同样覆盖 `tools/*`、`resources/*`、`prompts/*`
 - **文件工具**
-  - `fs.read_file`
-  - `fs.write_file`
-  - `fs.list_dir`
-  - `fs.stat_path`
-  - `fs.make_dir`
-  - `fs.move_path`
-  - `fs.delete_path`
-  - `fs.search_text`
-  - `fs.replace_text`
-  - `fs.apply_unified_diff`
-  - `fs.edit_lines`
-  - `fs.pull_file`（签发短时效下载 URL，客户端自行下载保存）
+  - `fs_read_file`
+  - `fs_write_file`
+  - `fs_list_dir`
+  - `fs_stat_path`
+  - `fs_make_dir`
+  - `fs_move_path`
+  - `fs_delete_path`
+  - `fs_search_text`
+  - `fs_replace_text`
+  - `fs_apply_unified_diff`
+  - `fs_edit_lines`
+  - `fs_pull_file`（签发短时效下载 URL，客户端自行下载保存）
 - **Git 工具**
-  - `git.status`
-  - `git.diff`
-  - `git.log`
-  - `git.add`
-  - `git.restore`
-  - `git.commit`
-  - `git.branch`
-  - `git.switch`
-  - `git.pull`
+  - `git_status`
+  - `git_diff`
+  - `git_log`
+  - `git_add`
+  - `git_restore`
+  - `git_commit`
+  - `git_branch`
+  - `git_switch`
+  - `git_pull`
 - **Go 导航工具**
-  - `go.list_symbols`
-  - `go.find_definition`
+  - `go_list_symbols`
+  - `go_find_definition`
 - **Exec 工具**
-  - `exec.run`
-  - `exec.run_template`
+  - `exec_run`
+  - `exec_run_template`
 - 仅开放 Go preset：`go_fmt` / `go_mod_download` / `go_test` / `go_generate` / `go_build` / `go_vet` / `go_mod_tidy` / `go_get` / `go_list` / `go_work_sync`
 - 同时支持固定白名单命令模板：`make_test` / `make_build` / `go_clean_testcache`（默认要求 `confirm=true`）
-- 文件拉取：`fs.pull_file` 签发 HMAC 签名、短时效、可限次的下载 URL，客户端通过 `GET /file/<token>` 流式下载；支持扩展名白名单与大小上限
+- 文件拉取：`fs_pull_file` 签发 HMAC 签名、短时效、可限次的下载 URL，客户端通过 `GET /file/<token>` 流式下载；支持扩展名白名单与大小上限
 - 审计日志：JSON Lines
 - 目录边界：启动目录 + `allowed_roots`
 - 浏览器 Origin 拒绝：未配置 `allowed_origins` / `MCP_ALLOWED_ORIGINS` 时默认不接受浏览器来源请求
@@ -211,7 +211,7 @@ unsafe_allow_all: true
 
 - `true`
   - 允许 `fs.*` 访问 `allowed_roots` 外路径
-  - 允许 `exec.run` 用 `command + args + env` 执行原始命令
+  - 允许 `exec_run` 用 `command + args + env` 执行原始命令
   - 允许 `git.*` / `go.*` 脱离 `allowed_roots` 约束
 - `false`
   - 退回主线分支那套白名单/允许目录约束
@@ -346,14 +346,14 @@ allowed_origins:
 - `exec.presets.<name>.enabled: false` 可禁用内置 preset
 - `exec.presets.<name>.command` 不能为空；裸命令名（如 `go`）按 `PATH` 查找，带 `/` 或 `\` 的相对命令路径按配置文件目录解析
 - `exec.presets.<name>.fixed_args` / `allowed_args` 可为空列表，但列表项本身不能为空或纯空白
-- `exec.command_templates.<name>` 可声明固定 argv 的模板命令，供 `exec.run_template` 调用
+- `exec.command_templates.<name>` 可声明固定 argv 的模板命令，供 `exec_run_template` 调用
 - `exec.command_templates.<name>.command` 的 argv 片段都不能为空；首个 argv 同样区分裸命令名与 path-like 相对路径，后续 argv 保持原样
 - `exec.command_templates.<name>.env` 可配置模板级固定环境变量
 - `exec.command_templates.<name>.allowed_workdirs` 可限制模板只允许在指定工作目录范围内执行；其中的相对路径同样按配置文件目录解析
 - `exec.command_templates.<name>.category` 可声明模板类别（如 build/test/cleanup）
 - `exec.command_templates.<name>.destructive` 可标识模板是否具有破坏性副作用
 - `exec.command_templates.<name>.requires_confirmation` 会要求调用方显式传 `confirm=true` 才执行
-- `pull_file.enabled` 默认 `true`；设为 `false` 后 `fs.pull_file` 直接报错且 `/file/*` 返回 404
+- `pull_file.enabled` 默认 `true`；设为 `false` 后 `fs_pull_file` 直接报错且 `/file/*` 返回 404
 - `pull_file.allowed_extensions` 空列表 = 不限制类型；条目必须以 `.` 开头、大小写不敏感（如 `.png`、`.JPG`），列表项不能为空
 - `pull_file.max_bytes` 默认 10 MiB；调用方 `max_bytes` 参数只能进一步收紧，不能放宽
 - `pull_file.url.ttl_sec` 默认 300 秒；`pull_file.url.max_downloads` 默认 0 = 不限制次数（仅受 TTL 约束），大于 0 时与 TTL 双条件、先到先失效
@@ -674,7 +674,7 @@ curl -s http://127.0.0.1:8080/mcp \
   -d '{"jsonrpc":"2.0","id":71,"method":"resources/subscribe","params":{"uri":"file:///your/allowed/root/README.md"}}'
 ```
 
-订阅后，如果该资源被 `fs.write_file` / `fs.replace_text` / `fs.apply_unified_diff` / `fs.edit_lines` / `fs.move_path` / `fs.delete_path` / `fs.make_dir` 等工具修改，对应 session 的 SSE stream 会收到：
+订阅后，如果该资源被 `fs_write_file` / `fs_replace_text` / `fs_apply_unified_diff` / `fs_edit_lines` / `fs_move_path` / `fs_delete_path` / `fs_make_dir` 等工具修改，对应 session 的 SSE stream 会收到：
 
 ```text
 event: message
@@ -747,11 +747,11 @@ curl -s http://127.0.0.1:8080/mcp \
 
 路径类补全会按字面前缀匹配，不会 trim 前后空白；因此以空格开头的文件名也能通过相同空格前缀补全。
 
-`fs.*` 工具会在执行前重复校验必填字符串参数：`path` / `src` / `dst`、`fs.write_file.text`、`fs.search_text.query`、`fs.replace_text.old_text` / `new_text`、`fs.edit_lines.new_text`、`fs.apply_unified_diff.diff` 显式传入非字符串时会按 `invalid params` 拒绝，不会被误报为缺失或继续落盘。对运行时已经拒绝空字符串的字段（路径参数、`query`、`old_text`、`diff`），工具 schema 同步声明 `minLength: 1`；`text`、`new_text`、`expected_old_text` 等允许空字符串表达有效语义的字段不声明该约束。
+`fs.*` 工具会在执行前重复校验必填字符串参数：`path` / `src` / `dst`、`fs_write_file.text`、`fs_search_text.query`、`fs_replace_text.old_text` / `new_text`、`fs_edit_lines.new_text`、`fs_apply_unified_diff.diff` 显式传入非字符串时会按 `invalid params` 拒绝，不会被误报为缺失或继续落盘。对运行时已经拒绝空字符串的字段（路径参数、`query`、`old_text`、`diff`），工具 schema 同步声明 `minLength: 1`；`text`、`new_text`、`expected_old_text` 等允许空字符串表达有效语义的字段不声明该约束。
 
-### 11. fs.apply_unified_diff
+### 11. fs_apply_unified_diff
 
-`fs.apply_unified_diff` 是当前推荐用于**复杂多处修改**的文件编辑原语：
+`fs_apply_unified_diff` 是当前推荐用于**复杂多处修改**的文件编辑原语：
 
 - 输入是**标准 unified diff 文本**
 - `diff` 必须是非空白 JSON string，工具 schema 声明 `minLength: 1`；非字符串会被拒绝且不会修改文件
@@ -784,7 +784,7 @@ curl -s http://127.0.0.1:8080/mcp \
     "id": 4,
     "method": "tools/call",
     "params": {
-      "name": "fs.apply_unified_diff",
+      "name": "fs_apply_unified_diff",
       "arguments": {
         "path": "README.md",
         "diff": "--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-# old\n+# new\n"
@@ -793,9 +793,9 @@ curl -s http://127.0.0.1:8080/mcp \
   }'
 ```
 
-### 11.1 fs.edit_lines
+### 11.1 fs_edit_lines
 
-`fs.edit_lines` 现在按**严格行语义**工作：
+`fs_edit_lines` 现在按**严格行语义**工作：
 
 - `start_line` / `end_line` 是 1-based 正整数行区间；工具 schema 声明 `minimum: 1`
 - `new_text` 必须是 JSON string；空字符串仍是合法删除语义
@@ -818,7 +818,7 @@ curl -s http://127.0.0.1:8080/mcp \
     "id": 4,
     "method": "tools/call",
     "params": {
-      "name": "fs.edit_lines",
+      "name": "fs_edit_lines",
       "arguments": {
         "path": "README.md",
         "start_line": 1,
@@ -829,9 +829,9 @@ curl -s http://127.0.0.1:8080/mcp \
   }'
 ```
 
-### 11.2 fs.search_text
+### 11.2 fs_search_text
 
-`fs.search_text` 的使用细节：
+`fs_search_text` 的使用细节：
 
 - 当前是**按子串匹配**，不是正则
 - `query` 必须是 JSON string，且只要求不是空字符串；工具 schema 声明 `minLength: 1`，空格、制表符等纯空白子串会按字面量搜索
@@ -842,9 +842,9 @@ curl -s http://127.0.0.1:8080/mcp \
 - 命中达到 `limit` 后会停止搜索，并返回已收集的部分结果
 - 现在已支持**超长单行**文件，不会因为默认 `bufio.Scanner` 的 64KiB 限制直接失败
 
-### 11.3 fs.move_path / fs.delete_path
+### 11.3 fs_move_path / fs_delete_path
 
-- `fs.move_path` / `fs.delete_path` 会操作最终路径目录项本身；如果最终路径是符号链接，会移动/删除链接，而不是链接目标
+- `fs_move_path` / `fs_delete_path` 会操作最终路径目录项本身；如果最终路径是符号链接，会移动/删除链接，而不是链接目标
 - 最终路径的父目录仍会解析符号链接并做 allowed-roots 校验，不能通过 `linked-dir/file` 这类父级符号链接逃逸
 
 ### 11.4 git.* 通用约束
@@ -853,15 +853,15 @@ curl -s http://127.0.0.1:8080/mcp \
 
 - 如果不传 `repo_path`，默认使用服务启动目录
 - `repo_path` 必须落在 `allowed_roots` 内，并且真实仓库根也必须仍在 `allowed_roots` 内
-- `git.add` / `git.restore` / `git.diff` 的 `paths` 必须是 **repo-relative** 路径
-- `git.add` / `git.restore` 的 `paths` 必须非空，工具 schema 声明 `minItems: 1`；`git.diff` 的 `paths` 仍可省略或传空数组表示全量 diff
+- `git_add` / `git_restore` / `git_diff` 的 `paths` 必须是 **repo-relative** 路径
+- `git_add` / `git_restore` 的 `paths` 必须非空，工具 schema 声明 `minItems: 1`；`git_diff` 的 `paths` 仍可省略或传空数组表示全量 diff
 - 不允许绝对路径，不允许 `..` 越界，不允许把路径伪装成选项，也不允许以 `:` 开头的 Git pathspec magic（如 `:/`）
-- `git.commit.message` 与 `git.switch.branch` 必须是非空字符串，工具 schema 声明 `minLength: 1`
-- `git.pull` 固定是 `git pull --ff-only`
+- `git_commit.message` 与 `git_switch.branch` 必须是非空字符串，工具 schema 声明 `minLength: 1`
+- `git_pull` 固定是 `git pull --ff-only`
 
-### 11.5 fs.replace_text
+### 11.5 fs_replace_text
 
-`fs.replace_text` 的使用细节：
+`fs_replace_text` 的使用细节：
 
 - 在单个文件中按**精确旧文本**替换新文本
 - 默认只替换**第一处命中**
@@ -871,9 +871,9 @@ curl -s http://127.0.0.1:8080/mcp \
 - `expected_replacements` 必须是非负整数；工具 schema 声明 `minimum: 0`
 - `old_text` / `new_text` 必须是 JSON string；`old_text` 不能为空且 schema 声明 `minLength: 1`，`new_text` 可以为空字符串
 
-### 12. exec.run
+### 12. exec_run
 
-`exec.run` 的使用细节：
+`exec_run` 的使用细节：
 
 - 只能运行预定义 preset，不支持任意 shell 命令
 - `workdir` 必填，且必须落在 `allowed_roots` 内
@@ -881,7 +881,7 @@ curl -s http://127.0.0.1:8080/mcp \
 - `preset` / `command` 若显式提供必须是 JSON string；`command` 还必须非空且 schema 声明 `minLength: 1`
 - 提供 `command` 会选择 raw command 分支，不能在类型错误或 `unsafe_allow_all=false` 时静默回退到 preset
 - preset 模式下 `args` 必须是字符串数组且成员非空；`timeout_override_sec` 必须是正整数，工具 schema 声明 `minimum: 1`
-- 当前 `yolo` 分支且 `unsafe_allow_all=true` 时，`exec.run` 也支持 `command + args + env` 原始命令模式；raw `args` 仍必须是字符串数组，但允许空字符串参数以保留真实 argv
+- 当前 `yolo` 分支且 `unsafe_allow_all=true` 时，`exec_run` 也支持 `command + args + env` 原始命令模式；raw `args` 仍必须是字符串数组，但允许空字符串参数以保留真实 argv
 - `go_test` / `go_generate` / `go_build` / `go_vet` 在没有显式 target 时，会自动补 `./...`
 - `go_mod_download` / `go_mod_tidy` / `go_get` / `go_list` / `go_work_sync` 会扩展 Go toolchain 能力，但仍受 preset 白名单控制
 - 所有 Go preset 会把这些目录固定到 `~/.mcp-tools/cache` 下：
@@ -912,7 +912,7 @@ curl -s http://127.0.0.1:8080/mcp \
     "id": 5,
     "method": "tools/call",
     "params": {
-      "name": "exec.run",
+      "name": "exec_run",
       "arguments": {
         "preset": "go_test",
         "workdir": ".",
@@ -930,7 +930,7 @@ curl -s http://127.0.0.1:8080/mcp   -H 'Authorization: Bearer change-me'   -H "M
     "id": 5,
     "method": "tools/call",
     "params": {
-      "name": "exec.run",
+      "name": "exec_run",
       "arguments": {
         "preset": "go_mod_tidy",
         "workdir": "."
@@ -947,7 +947,7 @@ curl -s http://127.0.0.1:8080/mcp   -H 'Authorization: Bearer change-me'   -H "M
     "id": 6,
     "method": "tools/call",
     "params": {
-      "name": "exec.run",
+      "name": "exec_run",
       "arguments": {
         "preset": "go_generate",
         "workdir": "."
@@ -968,7 +968,7 @@ curl -s http://127.0.0.1:8080/mcp \
     "id": 7,
     "method": "tools/call",
     "params": {
-      "name": "exec.run",
+      "name": "exec_run",
       "arguments": {
         "preset": "go_get",
         "workdir": ".",
@@ -978,9 +978,9 @@ curl -s http://127.0.0.1:8080/mcp \
   }'
 ```
 
-### 12.4 exec.run_template
+### 12.4 exec_run_template
 
-`exec.run_template` 的使用细节：
+`exec_run_template` 的使用细节：
 
 - 只能运行服务端配置好的模板命令
 - 客户端只能传：`template`、`workdir`、`timeout_override_sec`、`confirm`
@@ -999,7 +999,7 @@ curl -s http://127.0.0.1:8080/mcp   -H 'Authorization: Bearer change-me'   -H "M
     "id": 7,
     "method": "tools/call",
     "params": {
-      "name": "exec.run_template",
+      "name": "exec_run_template",
       "arguments": {
         "template": "make_test",
         "workdir": "."
@@ -1008,15 +1008,15 @@ curl -s http://127.0.0.1:8080/mcp   -H 'Authorization: Bearer change-me'   -H "M
   }'
 ```
 
-#### 12.5 fs.pull_file（拉取服务器文件到客户端）
+#### 12.5 fs_pull_file（拉取服务器文件到客户端）
 
 ```bash
-# 1. 客户端调用 fs.pull_file（JSON 模式）
+# 1. 客户端调用 fs_pull_file（JSON 模式）
 curl -sS -X POST http://127.0.0.1:8080/mcp \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -H "Mcp-Session-Id: <session-id>" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fs.pull_file","arguments":{"path":"progress.png"}}}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fs_pull_file","arguments":{"path":"progress.png"}}}'
 # => {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"issued pull link"}],
 #     "structuredContent":{"url":"/file/<token>","url_kind":"relative","filename":"progress.png",
 #     "bytes":12345,"mime_type":"image/png","expires_in_sec":300,"max_downloads":0}, ...}}
@@ -1032,16 +1032,16 @@ curl -o ./progress.png "https://files.example.com/mcp-tools/file/<token>"
 
 - 下载 URL 是唯一授权凭据：**持有 URL 即有权下载**，请勿转发；有效期与次数由 `pull_file.url.*` 控制
 - 服务重启后所有已签发 URL 立即失效
-- 每次下载都会写入一条 `fs.pull_file.download` 审计事件
+- 每次下载都会写入一条 `fs_pull_file.download` 审计事件
 
 ## 13. Go 导航工具
 
 这两个工具用于补齐 coding agent 的 **outline + definition** 工作流：
 
-- `go.list_symbols`
+- `go_list_symbols`
   - 输入：单个 Go 文件 `path`，必须是 JSON string
   - 输出：该文件中的顶层 `func` / `method` / `type` / `var` / `const`
-- `go.find_definition`
+- `go_find_definition`
   - 输入：`path + line + column`；`path` 必须是 JSON string，`line` / `column` 必须是正 JSON integer，工具 schema 声明 `minimum: 1`
   - 类型错误会在 package load 前按 validation error 拒绝；正整数但越界的位置仍返回 `position_out_of_bounds`
   - `line` / `column` 必须落在标识符字符范围内；标识符后的 `(`、`.` 或空白不会被当作该标识符
@@ -1052,9 +1052,9 @@ curl -o ./progress.png "https://files.example.com/mcp-tools/file/<token>"
 
 - 先看清一个 Go 文件里有哪些顶层声明
 - 再从当前光标位置跳到定义
-- 再决定是否继续 `fs.read_file` / `fs.apply_unified_diff`
+- 再决定是否继续 `fs_read_file` / `fs_apply_unified_diff`
 
-### 13.1 go.list_symbols
+### 13.1 go_list_symbols
 
 ```bash
 curl -s http://127.0.0.1:8080/mcp \
@@ -1066,7 +1066,7 @@ curl -s http://127.0.0.1:8080/mcp \
     "id": 8,
     "method": "tools/call",
     "params": {
-      "name": "go.list_symbols",
+      "name": "go_list_symbols",
       "arguments": {
         "path": "internal/httpapi/server.go"
       }
@@ -1074,7 +1074,7 @@ curl -s http://127.0.0.1:8080/mcp \
   }'
 ```
 
-### 13.2 go.find_definition
+### 13.2 go_find_definition
 
 ```bash
 curl -s http://127.0.0.1:8080/mcp \
@@ -1086,7 +1086,7 @@ curl -s http://127.0.0.1:8080/mcp \
     "id": 9,
     "method": "tools/call",
     "params": {
-      "name": "go.find_definition",
+      "name": "go_find_definition",
       "arguments": {
         "path": "internal/httpapi/server.go",
         "line": 180,
