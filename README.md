@@ -2,7 +2,18 @@
 
 一个基于 Go 1.20 的单体 MCP HTTP 服务，提供文件系统、Git、Go 导航与命令执行能力，供远程 AI 代理通过 MCP 调用本地工具。
 
-当前 `yolo` 分支默认开启：
+> ⚠️ **安全警告：`unsafe_allow_all` 默认启用**
+>
+> 本仓库默认配置 `unsafe_allow_all: true`，启用后：
+> - `fs.*` 工具可访问 `allowed_roots` 之外的任意文件路径
+> - `exec.run` 可执行任意 `command + args + env`（不再限于 Go preset）
+> - `git.*` 的 `repo_path` 可以指向任意 Git 仓库
+> - 模板的 `requires_confirmation` 和 `allowed_workdirs` 限制被旁路
+>
+> 所有操作仍需有效的 Bearer Token 并保留审计日志，但路径和命令限制被完全放开。
+> **在生产环境部署时，请通过环境变量 `MCP_UNSAFE_ALLOW_ALL=false` 或配置文件 `unsafe_allow_all: false` 关闭此模式。**
+
+当前默认开启：
 
 ```yaml
 unsafe_allow_all: true
@@ -33,6 +44,7 @@ unsafe_allow_all: true
 - **SSE / Streamable HTTP 模式**
   - `POST /mcp` + `Accept: text/event-stream`：单次 SSE 响应
   - `GET /mcp` + `Accept: text/event-stream`：按 session 建立长连接事件流
+  - `Accept` 头按逗号分割后逐段做前缀匹配，不解析 media range 的 `q` 参数；若 JSON 与 SSE 都可接受，则优先 JSON 以兼容 mixed Accept 客户端
   - 如果服务重启导致旧 `Mcp-Session-Id` 已失效，服务端会把这类 stream 请求按“未初始化 session”处理并提示重新 initialize，而不是直接返回 `invalid or expired session`
   - 当某个 session 已有活动 SSE stream 时，后续 `POST /mcp` + `Accept: text/event-stream` 会把结果**异步投递**到该 stream，并返回 `202 Accepted`
   - 异步投递同样覆盖 `tools/*`、`resources/*`、`prompts/*`
@@ -45,6 +57,7 @@ unsafe_allow_all: true
   - `fs.move_path`
   - `fs.delete_path`
   - `fs.search_text`
+  - `fs.find_files`
   - `fs.replace_text`
   - `fs.apply_unified_diff`
   - `fs.edit_lines`
@@ -64,6 +77,8 @@ unsafe_allow_all: true
 - **Exec 工具**
   - `exec.run`
   - `exec.run_template`
+  - `exec.shell`（`unsafe_allow_all=true` 时可用，支持管道/重定向/环境变量展开）
+  - `exec.start_process` / `exec.list_processes` / `exec.process_logs` / `exec.stop_process` / `exec.remove_process`（后台进程管理，`unsafe_allow_all=true` 时可用）
 - 仅开放 Go preset：`go_fmt` / `go_mod_download` / `go_test` / `go_generate` / `go_build` / `go_vet` / `go_mod_tidy` / `go_get` / `go_list` / `go_work_sync`
 - 同时支持固定白名单命令模板：`make_test` / `make_build` / `go_clean_testcache`（默认要求 `confirm=true`）
 - 审计日志：JSON Lines
@@ -130,6 +145,9 @@ defaults < 默认 home 配置文件 < YAML < environment variables
 - 代码里使用 `os.UserHomeDir()` + `filepath.Join(...)` 计算路径
 - 所以会自动兼容 Windows 的路径分隔符
 - 如果默认路径下存在配置文件，在**未显式传 `-config`** 且**未设置 `MCP_CONFIG_FILE`** 时，会自动加载
+- YAML 支持多文档：只有**第一个文档**生效，其余文档被静默忽略；空文件/仅注释文件允许存在并表示“不做 YAML 覆盖”
+- 未知字段会被静默忽略（不做严格字段校验），配置拼写错误不会在启动或 `-validate-config` 时报错
+- 显式 `null` / `~` 或空字段值会让该字段**回退默认值**；空列表项会被静默丢弃
 
 ### 你通常先只需要关心 3 个字段
 
@@ -213,6 +231,7 @@ unsafe_allow_all: true
 - 服务启动目录会**自动加入**
 - `~/.mcp-tools` 也会**自动加入**
 - `allowed_roots` 是“附加目录”，不是完整覆盖列表
+- `allowed_roots` / `MCP_ALLOWED_ROOTS` 中的空条目（空字符串、尾随逗号）会被**静默忽略**，不会报错也不会启用额外目录
 
 ### `allowed_origins` 到底是什么？
 
@@ -304,6 +323,7 @@ allowed_origins:
 
 - YAML 中的相对路径，按**配置文件所在目录**解析
 - `allowed_roots` 是**附加白名单目录**；启动目录始终保留
+- `allowed_roots` 列表项不能为空（空条目会被静默忽略），避免拼写/模板错误被掩盖
 - 默认 `audit_log_path`：
   - Linux / macOS：`~/.mcp-tools/mcp-audit.jsonl`
   - Windows：`%USERPROFILE%\\.mcp-tools\\mcp-audit.jsonl`
@@ -312,15 +332,21 @@ allowed_origins:
   - `audit_rotate_max_mb`
   - `audit_rotate_max_backups`
   - 轮转文件名形如 `mcp-audit.jsonl.1`、`mcp-audit.jsonl.2`
-- `allowed_origins` 是浏览器 `Origin` 白名单；**不是 hostname 入站控制**
-- `git.allowed_subcommands` 只能配置当前实现支持的白名单子命令，**不支持 `push`**
+- 审计日志中的工具参数是摘要化记录：`arguments` 按 JSON 记录，其中 `env` 参数的值统一脱敏为固定掩码 `***`（仅保留键名，`API_TOKEN` 等敏感值不以明文落盘），其余参数（`command` / `workdir` / `args` 等）原样保留；控制台日志与 JSONL 审计日志经过同一脱敏，控制台只输出工具名与参数摘要；`env_keys` 摘要仅记录键名
+- `allowed_origins` 是浏览器 `Origin` 白名单；**不是 hostname 入站控制**；空条目或纯空白项会被静默忽略
+- `supported_protocols` 若显式配置，空列表 `[]` 会被**静默忽略**（保持默认协议列表），不会报错也不会禁用任何协议；空字符串条目同样被静默忽略
+- `git.allowed_subcommands` 可显式配置子命令白名单；空列表 `[]` 会被**静默忽略**，**不会禁用 Git**（保持默认白名单）；未知子命令或 `push` 会在启动或 `-validate-config` 时报错；空字符串条目会被静默忽略
+- `command_timeout_sec` 是 exec 默认超时（默认 30 秒）；未显式设置 `timeout_sec` 的 preset/template 会继承它；环境变量 `MCP_COMMAND_TIMEOUT_SEC` 可覆盖
 - `exec.presets.<name>.enabled: false` 可禁用内置 preset
+- `exec.presets.<name>.command` 不能为空；裸命令名（如 `go`）按 `PATH` 查找，带 `/` 或 `\` 的相对命令路径按**配置文件所在目录**解析
+- `exec.presets.<name>.fixed_args` / `allowed_args` 可为空列表；列表项为空或纯空白时会被静默忽略（不报错）
 - `exec.command_templates.<name>` 可声明固定 argv 的模板命令，供 `exec.run_template` 调用
+- `exec.command_templates.<name>.command` 的 argv 片段不能为空（空片段会在启动或 `-validate-config` 时报错）；首个 argv 同样区分裸命令名与 path-like 相对路径，后续 argv 保持原样
 - `exec.command_templates.<name>.env` 可配置模板级固定环境变量
-- `exec.command_templates.<name>.allowed_workdirs` 可限制模板只允许在指定工作目录范围内执行
+- `exec.command_templates.<name>.allowed_workdirs` 可限制模板只允许在指定工作目录范围内执行；其中的相对路径同样按**配置文件所在目录**解析，空条目会在启动或 `-validate-config` 时报错
 - `exec.command_templates.<name>.category` 可声明模板类别（如 build/test/cleanup）
 - `exec.command_templates.<name>.destructive` 可标识模板是否具有破坏性副作用
-- `exec.command_templates.<name>.requires_confirmation` 可为后续确认流预留风险标记
+- `exec.command_templates.<name>.requires_confirmation` 会要求调用方显式传 `confirm=true` 才执行（`unsafe_allow_all=true` 时旁路该确认）
 
 ## 启动
 
@@ -366,14 +392,14 @@ go run ./cmd/mcp-tools
 - `MCP_LOG_LEVEL`：控制台日志级别，支持 `INFO/WARN/ERROR/DEBUG`
 - `MCP_UNSAFE_ALLOW_ALL`：是否开启满权限模式，支持 `true/false`，当前 `yolo` 分支默认 `true`
 - `MCP_LISTEN_ADDR`：默认 `0.0.0.0:8080`
-- `MCP_ALLOWED_ROOTS`：逗号分隔的额外允许目录
-- `MCP_ALLOWED_ORIGINS`：逗号分隔的允许浏览器来源
+- `MCP_ALLOWED_ROOTS`：逗号分隔的额外允许目录；空段（例如尾随逗号）会被静默忽略，不会报错
+- `MCP_ALLOWED_ORIGINS`：逗号分隔的允许浏览器来源；空段（例如尾随逗号）会被静默忽略，不会报错
 - `MCP_AUDIT_LOG_PATH`：默认：
   - Linux / macOS：`~/.mcp-tools/mcp-audit.jsonl`
   - Windows：`%USERPROFILE%\\.mcp-tools\\mcp-audit.jsonl`
 - `MCP_AUDIT_ROTATE_MAX_MB`：审计日志滚动大小阈值（MiB），默认 `10`
 - `MCP_AUDIT_ROTATE_MAX_BACKUPS`：审计日志最多保留的旧文件数，默认 `5`
-- `MCP_COMMAND_TIMEOUT_SEC`：默认 `30`
+- `MCP_COMMAND_TIMEOUT_SEC`：exec 默认超时（秒），默认 `30`
 - `MCP_OUTPUT_MAX_BYTES`：默认 `65536`
 - `MCP_STREAM_QUEUE_SIZE`：单个 SSE stream 的内部队列容量，默认 `128`
 - `MCP_MAX_REQUEST_BYTES`：默认 `1048576`
@@ -393,7 +419,7 @@ go run ./cmd/mcp-tools
 - SSE stream 内部消息队列默认容量为 `128`
 - `ReadHeaderTimeout=5s`
 - `ReadTimeout=15s`
-- `WriteTimeout=30s`
+- `WriteTimeout=30s`（可通过 `write_timeout_sec` / `MCP_WRITE_TIMEOUT_SEC` 配置；SSE 长连接写入受此超时约束，exec 工具通过 context.Timeout 自行控制执行时间）
 - `IdleTimeout=60s`
 - 提供 `/healthz` 与 `/readyz`
 - 提供 Bearer Token 保护的 `/debug/statez`，用于查看运行态计数和 transport 观测数据
@@ -430,6 +456,13 @@ go run ./cmd/mcp-tools
 - 请求：`POST /mcp`
 - 响应：`application/json`
 - 每个请求同步返回一个 JSON-RPC 结果
+- 请求正文按 `json.Decoder` 单值解码：解码出第一个 JSON 值后即停止，**尾随的第二个 JSON 值或垃圾内容不会报错**（会被静默接受）
+- 无法解码出 JSON 值（包括顶层数组解析进对象失败、语法错误）会按 parse error（`-32700`）拒绝
+- `jsonrpc` 缺失或空字符串会默认补 `"2.0"`；显式提供但不是 `"2.0"` 会按 parse error（`-32700`）拒绝
+- `method` 由 JSON-RPC 分发处理：未知方法按 invalid request（`-32601`）拒绝；method 缺失同样落到 `-32601`
+- `params` 解码到 `map[string]any`：省略或 `null` 会按空对象处理；**数组或字符串等非对象 params 会在解码阶段按 parse error（`-32700`）拒绝**
+- `id` 字段使用 `any` 类型：字符串、数字、布尔、对象都会被接受；数字 ID 按原始 JSON number 解码（大整数可能被 `float64` 舍入）
+- `id` 带 `omitempty` 序列化：请求 `id` 为 `null` 时，error response 中该字段会被省略；无法解析出 id 的错误请求返回 `id:null`（显式包含）
 
 ### 模式 2：单次 SSE
 
@@ -482,6 +515,8 @@ curl -i http://127.0.0.1:8080/mcp \
 ```
 
 响应头里的 `Mcp-Session-Id` 就是后续请求要带的会话 ID。
+
+JSON 与单次 SSE 的 `initialize.params.protocolVersion` 按 `chooseProtocol` 处理：缺失或空字符串默认使用首个支持协议；显式提供但不支持的版本会按 unsupported protocol version（`-32002`）拒绝。`initialize.params.clientInfo` 可省略或为 `null`，按空对象记录。
 
 ### 2. tools/list（JSON）
 
@@ -599,6 +634,7 @@ curl -s http://127.0.0.1:8080/mcp \
 
 - `contents[].text`：目录摘要或文件内容
 - `contents[].mimeType`
+- `contents[].uri`：原样返回请求中的 `uri` 字符串（服务端不做 URI 转义或规范化；`resources/list` 与模板中的 URI 由 `"file://" + path` 直接拼接）
 - `contents[]._meta`
   - `path`
   - `name`
@@ -607,6 +643,9 @@ curl -s http://127.0.0.1:8080/mcp \
   - `mod_time`
   - `mode`
   - 目录额外包含 `child_count` 和 `entries`
+
+资源 URI 必须是本地 `file://` URI：path 按字面处理后交给路径解析（不做 URL 解码，`%20` 不会还原成空格），host 段会被并入路径处理，不接受远程 authority；路径中包含 `#` / `?` 的文件名无法通过 URI 字面拼接表达。
+`resources/read` / `resources/subscribe` / `resources/unsubscribe` 的 `uri` 参数按 JSON string 提取（非字符串会按空串处理并返回 `resource uri required` 或 `unsupported resource uri`）。
 
 ### 9.1 resources/subscribe
 
@@ -624,6 +663,9 @@ curl -s http://127.0.0.1:8080/mcp \
 event: message
 data: {"jsonrpc":"2.0","method":"notifications/resources/updated","params":{"uri":"file:///..."}}
 ```
+
+订阅 URI 按字面字符串记录（`strings.TrimPrefix(uri, "file://")` 后交给路径解析），`file:///root/./README.md` 会被路径解析规范化，但 `file://localhost/root/README.md` 与 `file:///root/README.md` **不会**匹配同一资源（localhost host 段并入路径后解析为不同路径）；通知中的 `uri` 使用订阅时传入的原始字符串。
+`resources/unsubscribe` 按 URI 字面匹配删除订阅；未订阅的 URI 会幂等成功（返回空对象），空 `uri` 参数按 invalid params 返回错误。
 
 如果订阅的是**目录资源**，其子文件/子目录发生增删改时，目录自身的 `file://.../dir` 订阅也会收到更新通知。
 
@@ -656,6 +698,8 @@ curl -s http://127.0.0.1:8080/mcp \
 - `_meta.inputSchema.properties`
 
 方便客户端直接用来生成更稳定的参数表单。
+其中 `_meta.inputSchema` 只声明 `type` / `required` / `properties`（含 `examples` / `default`），**不声明 `minLength`**。
+`prompts/get.params.name` 按空串校验（缺失或空白会按 invalid params（`-32602`）拒绝）；`params.arguments` 可省略或为 `null`，按空对象传给 prompt；非 object（如数组/字符串）会被规范化为空对象传入 prompt。`prompts/get` 会对必填字段做非空校验（如 `safe_file_edit.task` / `path` 与 `go_dev_loop.goal` / `workdir`），但不对参数做 JSON 类型校验：传错类型的参数（如 `expected_old_text`、`run_vet`）会被当作空值/缺失处理，不会返回类型错误。
 
 ### 10.1 completion/complete
 
@@ -682,16 +726,30 @@ curl -s http://127.0.0.1:8080/mcp \
 - `go_dev_loop.test_target`
 - `resources/templates/list` 返回的 `file://.../{path}` 模板参数 `path`
 
+`completion/complete` 的 `ref` 与 `argument` 按 `normalizeMap` 处理：对象按原样使用，省略或 `null` 按空对象处理，非 object（如数组/字符串）会被规范化为空对象。`ref.type`、对应的 `ref.name` / `ref.uri`、`argument.name` 与 `argument.value` 按 JSON string 提取（非字符串会按空串处理）。`argument.value` 可以是空字符串，用于请求空前缀补全。对于 `go_dev_loop.test_target` 补全，`context.arguments.workdir` 按 JSON string 提取；省略或 `null` 按未提供处理（`.` 与空值等价）。
+
+路径类补全会按字面前缀匹配，不会 trim 前后空白；因此以空格开头的文件名也能通过相同空格前缀补全。
+
+`fs.*` 工具会在执行前校验必填字符串参数：`path` / `src` / `dst`、`fs.write_file.text`、`fs.search_text.query`、`fs.replace_text.old_text` / `new_text`、`fs.edit_lines.new_text`、`fs.apply_unified_diff.diff` 显式传入非字符串时会按 `invalid params` 拒绝，不会被误报为缺失或继续落盘。工具 schema 只声明 `type`，**不声明 `minLength` / `minimum` 等约束**（空字符串语义由各工具执行逻辑决定）。
+
 ### 11. fs.apply_unified_diff
 
 `fs.apply_unified_diff` 是当前推荐用于**复杂多处修改**的文件编辑原语：
 
 - 输入是**标准 unified diff 文本**
-- 目标文件 `path` 单独传参，diff header 只做一致性校验
+- `diff` 必须是非空白 JSON string；工具 schema 只声明 `type`，不声明 `minLength`；非字符串会被拒绝且不会修改文件
+- 目标文件 `path` 单独传参；工具 schema 只声明 `type`；diff header 只做一致性校验
+- diff header 可使用相对路径；只有真实 `..` 路径段会被视为越界，`..data/file.txt` 这类普通目录名仍按合法相对路径匹配
 - 第一版只支持**单文件**，但支持**多个 hunk**
 - 应用策略是**严格命中**：任一 hunk 对不上就整体失败
+- hunk header 行号/行数必须是可解析的整数；解析失败按 `0` 处理，行号溢出或回退会按 hunk 边界钳制（不截断到 int 范围，超大值会作为越界拒绝）
+- hunk header 的非空 range 必须使用正起始行号；`0` 只允许用于 `,0` 空 range（例如文件起始处的插入/删除边界）
 - 失败时会返回**结构化冲突详情**，方便 agent 重新读文件并重生 patch
+- `expected_old_text` 是精确整文件前置条件；**空字符串表示不启用该前置条件**（跳过校验）
+- `expected_old_text` 必须是 JSON string；非字符串会被拒绝且不会修改文件
 - `dry_run=true` 时只验证 patch，不写盘
+- `dry_run` 必须是 JSON boolean；字符串等非布尔值会被按 `false` 处理（正常写盘）
+- `context_lines` 可选；`0`–`20` 之间生效，**大于 20 或负值会被忽略**并回退默认 `2`
 
 适合场景：
 
@@ -722,11 +780,15 @@ curl -s http://127.0.0.1:8080/mcp \
 
 `fs.edit_lines` 现在按**严格行语义**工作：
 
-- `start_line` / `end_line` 是 1-based 行区间
+- `start_line` / `end_line` 是 1-based 正整数行区间；工具 schema 只声明 `type`
+- `new_text` 必须是 JSON string；空字符串仍是合法删除语义
 - `new_text` 会按“逻辑行”解释，不会与后续内容黏连
 - `new_text` 中的**中间空行会保留**，不会被自动忽略
 - `new_text == ""` 表示“不插入任何行”，也就是删除替换区间
 - `new_text == "\n"` 表示插入 **1 个空行**
+- `expected_old_text` 是精确区间前置条件；**空字符串表示不启用该前置条件**（跳过匹配）
+- `expected_old_text` 必须是 JSON string；非字符串会被拒绝且不会修改文件
+- `context_lines` 可选；`0`–`20` 之间生效，**大于 20 或负值会被忽略**并回退默认 `2`；工具 schema 不声明 `minimum`
 - 调用方仍应**显式控制自己想要的换行结构**，例如想替换成两行就传两行文本
 
 ```bash
@@ -754,31 +816,95 @@ curl -s http://127.0.0.1:8080/mcp \
 
 `fs.search_text` 的使用细节：
 
-- 当前是**按子串匹配**，不是正则
+- 支持**字面量子串**与**正则表达式**搜索
 - `path` 可以是单个文件，也可以是目录
 - 目录模式下会递归搜索
-- 默认 `limit=200`，最大支持到 `1000`
+- 默认 `limit=200`，最大支持到 `1000`（`limit` 参数 `>0 且 ≤1000` 时生效，越界值回退默认 `200`）
 - 现在已支持**超长单行**文件，不会因为默认 `bufio.Scanner` 的 64KiB 限制直接失败
+- **默认启用 `.gitignore` 过滤**：搜索目录时，会自动读取目录下的 `.gitignore` 文件并跳过匹配的路径
+- 可以通过传递 `use_gitignore: false` 关闭 gitignore 过滤
+- > ⚠️ 当前 `.gitignore` 匹配是 best-effort 简化实现：仅支持根目录 `.gitignore`，支持精确路径、`*` 通配、`**/` 前缀、`/` 后缀目录标记；暂不支持 `!` 取反、`?`、`[abc]` 字符类、嵌套 `.gitignore` 或锚定 `/`
 
-### 11.3 git.* 通用约束
+示例 - 正则搜索：
+
+```bash
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer change-me' \
+  -H "Mcp-Session-Id: ${SESSION_ID}" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 10,
+    "method": "tools/call",
+    "params": {
+      "name": "fs.search_text",
+      "arguments": {
+        "path": ".",
+        "query": "func\\s+\\w+\\s*\\(",
+        "regex": true,
+        "limit": 50
+      }
+    }
+  }'
+```
+
+### 11.3 fs.find_files (新增)
+
+`fs.find_files` 用于**按 glob 模式查找文件**：
+
+- `path`：搜索根目录，可以是单个文件或目录
+- `pattern`：glob 模式，按 `filepath.Match` 语义匹配；模式包含独立的 `**` 段时支持**跨层级匹配**（`**` 匹配任意层级、含零层）——`**/*.go` 匹配根目录与所有子目录的 `.go` 文件，`**/test_*.py` 同理，`**/pkg/util.go` 匹配 `pkg/util.go`（`**` 消费零段）；单个 `*` 不跨 `/`（`**/pkg/*.go` 只匹配 `pkg` 直下，不含更深子目录）；不含 `**` 段的模式按既有行为对文件 basename 匹配（递归遍历目录）
+- `?` 与 `[abc]` 字符类受 `filepath.Match` 支持并按其语义生效
+- 默认 `limit=100`，最大支持到 `1000`
+- **默认启用 `.gitignore` 过滤**：搜索目录时，会自动读取目录下的 `.gitignore` 文件并跳过匹配的路径
+- 可以通过传递 `use_gitignore: false` 关闭 gitignore 过滤
+- > ⚠️ 当前 `.gitignore` 匹配是 best-effort 简化实现：仅支持根目录 `.gitignore`，支持精确路径、`*` 通配、`**/` 前缀、`/` 后缀目录标记；暂不支持 `!` 取反、`?`、`[abc]` 字符类、嵌套 `.gitignore` 或锚定 `/`
+
+示例：
+
+```bash
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer change-me' \
+  -H "Mcp-Session-Id: ${SESSION_ID}" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 11,
+    "method": "tools/call",
+    "params": {
+      "name": "fs.find_files",
+      "arguments": {
+        "path": ".",
+        "pattern": "**/*.go",
+        "limit": 200
+      }
+    }
+  }'
+```
+
+### 11.4 git.* 通用约束
 
 `git.*` 工具有几条共同规则：
 
 - 如果不传 `repo_path`，默认使用服务启动目录
 - `repo_path` 必须落在 `allowed_roots` 内，并且真实仓库根也必须仍在 `allowed_roots` 内
 - `git.add` / `git.restore` / `git.diff` 的 `paths` 必须是 **repo-relative** 路径
-- 不允许绝对路径，不允许 `..` 越界，不允许把路径伪装成选项
+- `git.add` / `git.restore` 的 `paths` 必须非空（缺失或空数组会按 invalid params 拒绝）；`git.diff` 的 `paths` 仍可省略或传空数组表示全量 diff
+- 不允许绝对路径，不允许 `..` 越界，不允许把路径伪装成选项（`-` 开头按 repo-relative 校验拒绝）
+- `git.commit.message` 与 `git.switch.branch` 按非空字符串校验（空白会被拒绝）；工具 schema 只声明 `type`，不声明 `minLength`
 - `git.pull` 固定是 `git pull --ff-only`
 
-### 11.4 fs.replace_text
+### 11.5 fs.replace_text
 
 `fs.replace_text` 的使用细节：
 
 - 在单个文件中按**精确旧文本**替换新文本
 - 默认只替换**第一处命中**
 - `replace_all=true` 时替换所有命中
+- `replace_all` 必须是 JSON boolean；字符串等非布尔值会被按 `false` 处理（只替换第一处）
 - `expected_replacements` 可用于保护性校验，要求替换前总命中数必须一致
-- `old_text` 不能为空
+- `expected_replacements` 接受 JSON number；负值会按 `expected_replacements must be >= 0` 拒绝；工具 schema 不声明 `minimum`
+- `old_text` / `new_text` 必须是 JSON string；`old_text` 不能为空（空串按 `old_text required and cannot be empty` 拒绝），`new_text` 可以为空字符串；工具 schema 不声明 `minLength`
 
 ### 12. exec.run
 
@@ -786,6 +912,11 @@ curl -s http://127.0.0.1:8080/mcp \
 
 - 只能运行预定义 preset，不支持任意 shell 命令
 - `workdir` 必填，且必须落在 `allowed_roots` 内
+- `workdir` 必须是非空 JSON string（空串或缺失按 `workdir required` 拒绝）；工具 schema 只声明 `type`，不声明 `minLength`
+- `preset` / `command` 按 JSON string 提取；`command` 空串按缺失处理（回退 preset 分支）
+- 提供 `command`（`unsafe_allow_all=true` 时）会选择 raw command 分支；`unsafe_allow_all=false` 时 `command` 参数被忽略，按 preset 处理
+- preset 模式下 `args` 必须是字符串数组且成员非空；`timeout_override_sec` 接受 JSON number（>0 生效，只缩不涨），工具 schema 不声明 `minimum`
+- 当前 `yolo` 分支且 `unsafe_allow_all=true` 时，`exec.run` 也支持 `command + args + env` 原始命令模式；raw `args` 仍必须是字符串数组，**成员为空字符串会按 `args must be non-empty strings` 拒绝**
 - `go_test` / `go_generate` / `go_build` / `go_vet` 在没有显式 target 时，会自动补 `./...`
 - `go_mod_download` / `go_mod_tidy` / `go_get` / `go_list` / `go_work_sync` 会扩展 Go toolchain 能力，但仍受 preset 白名单控制
 - 所有 Go preset 会把这些目录固定到 `~/.mcp-tools/cache` 下：
@@ -798,8 +929,10 @@ curl -s http://127.0.0.1:8080/mcp \
 - `go_get` 允许受控模块参数（例如 `example.com/mod@v1.2.3`）或本地 target
 - `go_list` 适合做 Go 包/依赖信息探查
 - `go_work_sync` 直接在 `workdir` 中执行 `go work sync`
-- `timeout_override_sec` 只能**缩短**默认超时，不能放大
-- `-o=...` / `-coverprofile=...` 这类 inline 路径参数也会再次校验，不能写到工作目录外
+- `timeout_override_sec` 接受 JSON number（>0 时生效），且仍然只能**缩短**默认超时，不能放大；工具 schema 不声明 `minimum`
+- 带值 Go flags（如 `-run` / `-skip` / `-tags` / `-go` / `-compat`）支持 `-flag value` 与 `-flag=value`；这些值不会被误判为 target
+- Go positional targets 会解析符号链接后校验仍在 `workdir` 内，不能借 `./linked/...` 逃逸到工作目录外
+- `-o=...` / `-o ...` / `-coverprofile=...` / `-coverprofile ...` 这类输出路径参数会解析符号链接后再次校验，不能写到工作目录外
 - `-vettool` 当前明确不支持
 
 ```bash
@@ -883,12 +1016,14 @@ curl -s http://127.0.0.1:8080/mcp \
 `exec.run_template` 的使用细节：
 
 - 只能运行服务端配置好的模板命令
-- 客户端只能传：`template`、`workdir`、`timeout_override_sec`
+- 客户端只能传：`template`、`workdir`、`timeout_override_sec`、`confirm`
+- `template` / `workdir` 必须是非空 JSON string（空串或缺失按 `template %q not allowed` / `workdir required` 拒绝）；工具 schema 只声明 `type`，不声明 `minLength`
 - 模板本身提供固定 argv，不支持任意 shell 字符串
 - 模板可带服务端固定 `env`
 - 模板可带风险语义：`category` / `destructive` / `requires_confirmation`
-- 若模板 `requires_confirmation=true`，客户端必须显式传 `confirm=true` 才会执行
-- `timeout_override_sec` 仍然只能缩短
+- 若模板 `requires_confirmation=true`，客户端必须显式传 `confirm=true` 才会执行（`unsafe_allow_all=true` 时旁路该确认）
+- `confirm` 必须是 JSON boolean；字符串等非布尔值会被按 `false` 处理（受确认约束的模板会拒绝执行）
+- `timeout_override_sec` 接受 JSON number（>0 生效），且仍然只能缩短；工具 schema 不声明 `minimum`
 
 ```bash
 curl -s http://127.0.0.1:8080/mcp   -H 'Authorization: Bearer change-me'   -H "Mcp-Session-Id: ${SESSION_ID}"   -H 'Content-Type: application/json'   -d '{
@@ -905,15 +1040,112 @@ curl -s http://127.0.0.1:8080/mcp   -H 'Authorization: Bearer change-me'   -H "M
   }'
 ```
 
-### 13. Go 导航工具
+#### 12.5 exec.shell（Shell 命令执行）
+
+`exec.shell` 仅在 `unsafe_allow_all=true` 时可用：
+
+- 输入：`command`（shell 命令字符串）+ `workdir`
+- 支持管道 `|`、重定向 `>`、环境变量展开等 shell 语法
+- Unix 下使用 `/bin/sh -c`，Windows 下使用 `cmd.exe /C`
+- 可选 `env` 与 `timeout_override_sec`
+
+```bash
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer change-me' \
+  -H "Mcp-Session-Id: ${SESSION_ID}" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 70,
+    "method": "tools/call",
+    "params": {
+      "name": "exec.shell",
+      "arguments": {
+        "command": "go version | grep go",
+        "workdir": "."
+      }
+    }
+  }'
+```
+
+#### 12.6 后台进程管理（exec.start_process 等）
+
+`unsafe_allow_all=true` 时可用：
+
+- `exec.start_process`：异步启动后台进程，立即返回 `id` / `pid`
+- `exec.list_processes`：列出所有后台进程及其状态、输出缓冲
+- `exec.process_logs`：按 `id` 获取 stdout / stderr 缓冲
+- `exec.stop_process`：按 `id` 停止进程；非 force 先对进程树优雅终止（Unix 对进程组发 `SIGTERM`，Windows 用 `taskkill /PID <pid> /T`），等待 5s 宽限期，未退出则升级强杀进程树；`force=true` 跳过宽限期直接强杀目标进程及其子进程（Windows `taskkill /PID <pid> /T /F`，Unix 对进程组发 `SIGKILL`）；等待进程退出有 10s 总超时，超时后强杀进程树并返回，不会无限阻塞
+- `exec.remove_process`：从进程表移除已结束（exited/stopped）的进程记录，使其不再出现在 `exec.list_processes`；运行中的进程会按 `process %q still running` 拒绝
+
+示例：
+
+```bash
+# 启动后台进程
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer change-me' \
+  -H "Mcp-Session-Id: ${SESSION_ID}" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 71,
+    "method": "tools/call",
+    "params": {
+      "name": "exec.start_process",
+      "arguments": {
+        "command": "go",
+        "workdir": ".",
+        "args": ["run", "cmd/mcp-tools"]
+      }
+    }
+  }'
+# => { "id": "proc-1", "pid": 1234, ... }
+
+# 查看进程列表
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer change-me' \
+  -H "Mcp-Session-Id: ${SESSION_ID}" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":72,"method":"tools/call","params":{"name":"exec.list_processes","arguments":{}}}'
+
+# 获取日志
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer change-me' \
+  -H "Mcp-Session-Id: ${SESSION_ID}" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":73,"method":"tools/call","params":{"name":"exec.process_logs","arguments":{"id":"proc-1"}}}'
+
+# 停止进程
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer change-me' \
+  -H "Mcp-Session-Id: ${SESSION_ID}" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":74,"method":"tools/call","params":{"name":"exec.stop_process","arguments":{"id":"proc-1"}}}'
+
+# 移除已结束的进程记录
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer change-me' \
+  -H "Mcp-Session-Id: ${SESSION_ID}" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":75,"method":"tools/call","params":{"name":"exec.remove_process","arguments":{"id":"proc-1"}}}'
+```
+
+说明：
+
+- 后台进程输出缓冲有上限（`output_max_bytes`），超出后保留尾部
+- 已结束的进程可通过 `exec.remove_process` 从进程表移除；未移除的记录会一直保留在列表中
+- 服务重启后所有后台进程记录丢失（进程本身可能仍在运行，无法再管理）
+
+## 13. Go 导航工具
 
 这两个工具用于补齐 coding agent 的 **outline + definition** 工作流：
 
 - `go.list_symbols`
-  - 输入：单个 Go 文件 `path`
+  - 输入：单个 Go 文件 `path`，必须是 JSON string
   - 输出：该文件中的顶层 `func` / `method` / `type` / `var` / `const`
 - `go.find_definition`
-  - 输入：`path + line + column`
+  - 输入：`path + line + column`；`path` 必须是 JSON string，`line` / `column` 接受 JSON number（<=0 按 `position_out_of_bounds` 拒绝），工具 schema 只声明 `type`，不声明 `minimum`
+  - 非法或越界的位置会按 `position_out_of_bounds` 拒绝（不进入 package load）；`line` / `column` 必须落在标识符字符范围内；标识符后的 `(`、`.` 或空白不会被当作该标识符
   - 第一版只覆盖 package-level declarations、methods 与 imported package symbols
   - 若定义落在 `allowed_roots` 外，仍会返回位置，但会标记 `in_allowed_roots=false`
 

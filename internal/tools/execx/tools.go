@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -45,7 +46,17 @@ type templateTool struct {
 }
 
 func NewTools(cfg config.Config) []mcp.Tool {
-	return []mcp.Tool{configuredTool{cfg: cfg}, templateTool{cfg: cfg}}
+	mgr := NewProcessManager()
+	return []mcp.Tool{
+		configuredTool{cfg: cfg},
+		templateTool{cfg: cfg},
+		startProcessTool{cfg: cfg, mgr: mgr},
+		listProcessesTool{cfg: cfg, mgr: mgr},
+		processLogsTool{cfg: cfg, mgr: mgr},
+		stopProcessTool{cfg: cfg, mgr: mgr},
+		removeProcessTool{cfg: cfg, mgr: mgr},
+		shellTool{cfg: cfg},
+	}
 }
 
 func (configuredTool) Name() string { return "exec.run" }
@@ -350,7 +361,18 @@ func mergeCommandEnv(base []string, fixed map[string]string) []string {
 	}
 	merged := cloneStrings(base)
 	for key, value := range fixed {
-		merged = append(merged, key+"="+value)
+		prefix := key + "="
+		// 先删除 base 中同 key 的旧条目，避免出现重复 KEY=value：
+		// Windows 取最后一个值，但 POSIX execve 对重复 key 的语义未定义，
+		// 部分实现取首个，会令 env 覆盖失效。
+		kept := merged[:0]
+		for _, entry := range merged {
+			if strings.HasPrefix(entry, prefix) {
+				continue
+			}
+			kept = append(kept, entry)
+		}
+		merged = append(kept, prefix+value)
 	}
 	return merged
 }
@@ -571,4 +593,66 @@ func cloneStrings(values []string) []string {
 	out := make([]string, len(values))
 	copy(out, values)
 	return out
+}
+
+// shellTool 执行 shell 命令字符串（支持管道、重定向、环境变量展开）。
+type shellTool struct {
+	cfg config.Config
+}
+
+func (shellTool) Name() string { return "exec.shell" }
+func (shellTool) Description() string {
+	return "Execute a shell command string (supports pipes, redirects, env expansion). Only available when unsafe_allow_all is enabled. Uses /bin/sh -c on Unix and cmd /C on Windows."
+}
+func (shellTool) ReadOnly() bool { return false }
+func (shellTool) Schema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"command":              map[string]any{"type": "string", "minLength": 1},
+			"workdir":              map[string]any{"type": "string", "minLength": 1},
+			"env":                  map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+			"timeout_override_sec": map[string]any{"type": "integer"},
+		},
+		"required": []string{"command", "workdir"},
+	}
+}
+
+func (t shellTool) Call(ctx context.Context, _ mcp.CallContext, args map[string]any) (mcp.Result, error) {
+	if !t.cfg.UnsafeAllowAll {
+		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("exec.shell requires unsafe_allow_all=true"), mcp.AuditData{Allowed: true, ResultDigest: "feature disabled"})
+	}
+	command, ok := args["command"].(string)
+	if !ok || strings.TrimSpace(command) == "" {
+		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("command required"), mcp.AuditData{Allowed: true, ResultDigest: "validation failed"})
+	}
+	rawWorkdir, ok := args["workdir"].(string)
+	if !ok || strings.TrimSpace(rawWorkdir) == "" {
+		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("workdir required"), mcp.AuditData{Allowed: true, ResultDigest: "validation failed"})
+	}
+	env, err := rawEnv(args["env"])
+	if err != nil {
+		return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{Workdir: rawWorkdir, Allowed: true, ResultDigest: "validation failed"})
+	}
+	workdir := rawWorkdir
+	if !filepath.IsAbs(workdir) {
+		workdir = filepath.Join(t.cfg.StartupDirectory, workdir)
+	}
+	resolvedWorkdir, err := security.RequireExistingWorkdir(workdir)
+	if err != nil {
+		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("workdir: %w", err), mcp.AuditData{TargetPath: rawWorkdir, Allowed: false, ResultDigest: "workdir rejected"})
+	}
+	timeout := applyTimeoutOverride(t.cfg.CommandTimeout, args["timeout_override_sec"])
+	shell := "/bin/sh"
+	flag := "-c"
+	if runtime.GOOS == "windows" {
+		shell = "cmd.exe"
+		flag = "/C"
+	}
+	argv := []string{shell, flag, command}
+	return runExecCommand(ctx, t.cfg, "shell", "shell", argv, resolvedWorkdir, rawWorkdir, timeout, env, false, map[string]any{
+		"mode":    "shell",
+		"command": command,
+	})
 }

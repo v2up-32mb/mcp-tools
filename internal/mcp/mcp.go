@@ -117,6 +117,33 @@ func (r *Registry) List() []map[string]any {
 	return tools
 }
 
+// redactedEnvMask 是 args.env 脱敏后的固定值掩码：
+// 审计日志只保留 env 的 key，值一律替换为该掩码（遗留项 MED-1，
+// API_TOKEN/DB_PASS 等敏感值不再以明文写入 JSONL 审计）。
+const redactedEnvMask = "***"
+
+// redactedArgs 返回审计日志用的 args 脱敏副本：仅当 args["env"] 存在
+// （map[string]any，MCP JSON 解码后的形态）时替换其值为掩码、保留 key；
+// 其余参数原样保留（command/workdir/args 等摘要不受影响）。
+// 统一在 Registry.Call 层处理，覆盖 exec.shell / exec.start_process / exec.run(raw env)
+// 三个 env 入口，不在各工具内重复实现；无 env 时返回原 args，不产生额外分配。
+func redactedArgs(args map[string]any) map[string]any {
+	rawEnv, ok := args["env"].(map[string]any)
+	if !ok || len(rawEnv) == 0 {
+		return args
+	}
+	out := make(map[string]any, len(args))
+	for key, value := range args {
+		out[key] = value
+	}
+	redacted := make(map[string]any, len(rawEnv))
+	for key := range rawEnv {
+		redacted[key] = redactedEnvMask
+	}
+	out["env"] = redacted
+	return out
+}
+
 func (r *Registry) Call(ctx context.Context, callCtx CallContext, name string, args map[string]any) (Result, error) {
 	r.mu.RLock()
 	t, ok := r.tools[name]
@@ -127,6 +154,8 @@ func (r *Registry) Call(ctx context.Context, callCtx CallContext, name string, a
 
 	started := time.Now()
 	result, callErr := t.Call(ctx, callCtx, args)
+	// 审计与控制台日志统一走脱敏副本：env 值掩码化，其余参数原样（MED-1）
+	auditArgs := redactedArgs(args)
 	event := audit.Event{
 		Timestamp:       started.UTC(),
 		RequestID:       callCtx.RequestID,
@@ -134,7 +163,7 @@ func (r *Registry) Call(ctx context.Context, callCtx CallContext, name string, a
 		ProtocolVersion: callCtx.ProtocolVersion,
 		RemoteAddr:      callCtx.RemoteAddr,
 		Tool:            name,
-		Arguments:       args,
+		Arguments:       auditArgs,
 		DurationMS:      time.Since(started).Milliseconds(),
 	}
 
@@ -151,7 +180,7 @@ func (r *Registry) Call(ctx context.Context, callCtx CallContext, name string, a
 		event.Error = toolErr.Error()
 		event.ResultDigest = toolErr.Audit.ResultDigest
 		_ = r.auditor.Write(event)
-		logToolCallError(callCtx, name, args, event.DurationMS, toolErr)
+		logToolCallError(callCtx, name, auditArgs, event.DurationMS, toolErr)
 		return ErrorResultWithStructured(toolErr.Error(), toolErr.StructuredContent, toolErr.Audit), nil
 	}
 
@@ -165,7 +194,7 @@ func (r *Registry) Call(ctx context.Context, callCtx CallContext, name string, a
 	event.ExitCode = result.Audit.ExitCode
 	event.ResultDigest = result.Audit.ResultDigest
 	_ = r.auditor.Write(event)
-	logToolCallInfo(name, args, event.DurationMS, result.Audit)
+	logToolCallInfo(name, auditArgs, event.DurationMS, result.Audit)
 	return normalizeResult(result), nil
 }
 
@@ -317,6 +346,15 @@ func summarizeToolFields(name string, args map[string]any) []applog.Field {
 	case name == "exec.run_template":
 		fields = appendStringField(fields, args, "template", "template")
 		fields = appendPathLikeField(fields, args, "workdir", "workdir")
+	case name == "exec.shell":
+		fields = appendStringField(fields, args, "command", "command")
+		fields = appendPathLikeField(fields, args, "workdir", "workdir")
+	case name == "exec.start_process":
+		fields = appendStringField(fields, args, "command", "command")
+		fields = appendPathLikeField(fields, args, "workdir", "workdir")
+		fields = appendArgsCountField(fields, args, "args")
+	case name == "exec.process_logs" || name == "exec.stop_process":
+		fields = appendStringField(fields, args, "id", "process_id")
 	case strings.HasPrefix(name, "go."):
 		fields = appendPathLikeField(fields, args, "path", "path")
 		fields = appendIntField(fields, args, "line", "line")

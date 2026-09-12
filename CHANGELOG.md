@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+### Added
+- `fs.search_text` 新增 `regex` 参数，支持正则表达式搜索
+- `fs.search_text` 新增 `use_gitignore` 参数，支持 `.gitignore` 过滤
+- 新增 `fs.find_files` 工具，支持按 glob 模式递归查找文件，支持 `.gitignore` 过滤
+- 新增后台进程管理工具（`unsafe_allow_all=true` 时可用）：
+  - `exec.start_process`：异步启动后台进程并返回进程 ID
+  - `exec.list_processes`：列出所有后台进程
+  - `exec.process_logs`：获取后台进程的 stdout/stderr 缓冲
+  - `exec.stop_process`：停止后台进程
+  - `exec.remove_process`：从进程表移除已结束的进程记录（运行中的进程拒绝移除）
+- 新增 `exec.shell` 工具（`unsafe_allow_all=true` 时可用）：执行 shell 命令字符串，支持管道、重定向与环境变量展开（Unix 用 `/bin/sh -c`，Windows 用 `cmd /C`）
+
+### Changed
+- `fs.search_text` 描述更新为支持正则表达式与 `.gitignore` 过滤
+- `mcp` 工具日志字段新增对 `exec.shell` / `exec.start_process` / `exec.process_logs` / `exec.stop_process` 的摘要支持
+- `exec.stop_process` 实现真正的进程树终止与有限超时：非 force 先优雅终止（Unix 对进程组发 `SIGTERM`，Windows 用 `taskkill /T`）并等待 5s 宽限期，超时升级强杀进程树；`force=true` 直接强杀目标进程及其子进程（Windows `taskkill /T /F`，Unix 进程组 `SIGKILL`）；等待进程退出有 10s 总超时，不再无限阻塞
+- 审计日志对 `arguments` 中的 `env` 参数统一脱敏：值替换为固定掩码 `***`、仅保留键名，覆盖 `exec.shell` / `exec.start_process` / `exec.run` 的 `env` 入口，JSONL 审计与控制台日志经过同一脱敏，敏感值不再明文落盘
+- `fs.find_files` 支持 `**` 跨层级 glob：`**` 匹配任意层级（含零层），`**/*.go` 等含 `/` 的模式不再恒返回 0 结果；单个 `*` 保持不跨 `/`，不含 `**` 段的模式保持既有 basename 语义
+
 ## [1.0.0] - 2026-04-30
 
 ### Added

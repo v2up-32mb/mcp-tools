@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -12,9 +13,17 @@ import (
 	"github.com/example/mcp-tools/internal/mcp"
 )
 
+// crossPlatformAbsUnixStyle 返回跨平台的绝对路径（Windows 带盘符，Unix 用 / 前缀）。
+func crossPlatformAbsUnixStyle() string {
+	if runtime.GOOS == "windows" {
+		return `C:\tmp\outside`
+	}
+	return "/tmp/outside"
+}
+
 func TestValidateArgsRejectsAbsolutePath(t *testing.T) {
 	preset := config.ExecPreset{AllowedArgs: []string{"-v"}, Timeout: time.Second}
-	_, err := validateArgs("go_test", preset, []any{"/tmp/outside"})
+	_, err := validateArgs("go_test", preset, []any{crossPlatformAbsUnixStyle()})
 	if err == nil {
 		t.Fatal("expected absolute path to be rejected")
 	}
@@ -33,7 +42,7 @@ func TestValidateArgsAllowsFlagsAndLocalTargets(t *testing.T) {
 
 func TestValidateArgsRejectsInlineAbsoluteOutputPath(t *testing.T) {
 	preset := config.ExecPreset{AllowedArgs: []string{"-o"}, Timeout: time.Second}
-	_, err := validateArgs("go_build", preset, []any{"-o=/tmp/outside-binary", "./..."})
+	_, err := validateArgs("go_build", preset, []any{"-o=" + crossPlatformAbsUnixStyle(), "./..."})
 	if err == nil {
 		t.Fatal("expected inline absolute output path to be rejected")
 	}
@@ -179,9 +188,15 @@ func TestExecRunAllowsRawCommandOutsideAllowedRootsWhenUnsafeAllowAllEnabled(t *
 		UnsafeAllowAll:   true,
 	}
 	tool := findTool(t, cfg, "exec.run")
+	command := "sh"
+	rawArgs := []any{"-c", `printf %s "$MCP_YOLO_TEST"`}
+	if runtime.GOOS == "windows" {
+		command = "cmd.exe"
+		rawArgs = []any{"/C", "echo %MCP_YOLO_TEST%"}
+	}
 	res, err := tool.Call(context.Background(), mcp.CallContext{}, map[string]any{
-		"command": "sh",
-		"args":    []any{"-c", "printf %s \"$MCP_YOLO_TEST\""},
+		"command": command,
+		"args":    rawArgs,
 		"env": map[string]any{
 			"MCP_YOLO_TEST": "raw-ok",
 		},
