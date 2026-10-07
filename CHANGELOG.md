@@ -17,11 +17,29 @@
   - 注意：这是破坏性变更，旧客户端需改用新工具名；历史发布说明保留旧名
 
 ### Added
+- 新增 `fs_find_files` 工具：按 glob 模式递归查找文件，支持 `**` 跨层级匹配（`**` 匹配任意层级、含零层），默认启用 `.gitignore` 过滤
+- `fs_search_text` 新增 `regex` 参数：`regex: true` 时把 `query` 当作 Go 正则编译，编译失败按 `invalid regex` 拒绝
+- `fs_search_text` / `fs_find_files` 新增 `use_gitignore` 参数（默认 `true`）：自动读取根目录 `.gitignore` 并跳过匹配路径；best-effort 简化实现（精确路径 / `*` 通配 / `**/` 前缀 / 尾部 `/` 目录标记），不支持 `!` 取反、`?`、`[abc]`、嵌套与锚定 `/`
+- 新增后台进程管理工具（`unsafe_allow_all=true` 时可用）：
+  - `exec_start_process`：异步启动后台进程并返回进程 ID
+  - `exec_list_processes`：列出所有后台进程
+  - `exec_process_logs`：获取后台进程的 stdout/stderr 缓冲
+  - `exec_stop_process`：停止后台进程
+  - `exec_remove_process`：从进程表移除已结束的进程记录（运行中的进程拒绝移除）
+- 新增 `exec_shell` 工具（`unsafe_allow_all=true` 时可用）：执行 shell 命令字符串，支持管道、重定向与环境变量展开（Unix 用 `/bin/sh -c`，Windows 用 `cmd /C`）
 - 新增 `fs_pull_file` 工具：为服务器工作区文件签发短时效、可限次、HMAC 签名绑定的下载 URL，客户端通过 `GET /file/<token>` 自行下载保存。
   - 新配置段 `pull_file`：`enabled` / `allowed_extensions` / `max_bytes` / `url.ttl_sec` / `url.max_downloads` / `url.public_base_url`
   - 默认返回相对路径 URL（客户端按自身 MCP base URL 拼接），可配置 `public_base_url` 返回绝对 URL
   - 下载端点独立审计事件 `fs_pull_file.download`
   - 新增 `internal/pullfile` 包与 `internal/httpapi/download_test.go` 端到端覆盖
+
+### Changed
+- `fs_search_text` 描述更新为支持正则表达式与 `.gitignore` 过滤
+- `mcp` 工具日志字段新增对 `exec_shell` / `exec_start_process` / `exec_process_logs` / `exec_stop_process` / `exec_remove_process` 的摘要支持
+- `exec_stop_process` 实现真正的进程树终止与有限超时：非 force 先优雅终止（Unix 对进程组发 `SIGTERM`，Windows 用 `taskkill /T`）并等待 5s 宽限期，超时升级强杀进程树；`force=true` 直接强杀目标进程及其子进程（Windows `taskkill /T /F`，Unix 进程组 `SIGKILL`）；等待进程退出有 10s 总超时，不再无限阻塞
+- 审计日志对 `arguments` 中的 `env` 参数统一脱敏：值替换为固定掩码 `***`、仅保留键名，覆盖 `exec_shell` / `exec_start_process` / `exec_run` 的 `env` 入口，JSONL 审计与控制台日志经过同一脱敏，敏感值不再明文落盘（注：与 `summarizeAuditArguments` 合并后，env 以 `keys`+`count` 摘要落盘）
+- `fs_find_files` 支持 `**` 跨层级 glob：`**` 匹配任意层级（含零层），`**/*.go` 等含 `/` 的模式不再恒返回 0 结果；单个 `*` 保持不跨 `/`，不含 `**` 段的模式保持既有 basename 语义
+- 目录搜索/查找在非 `unsafe_allow_all` 模式下会重新校验每个文件路径并跳过指向 `allowed_roots` 外的符号链接（`fs_search_text` / `fs_find_files` 统一行为）
 
 ## [1.0.0] - 2026-04-30
 

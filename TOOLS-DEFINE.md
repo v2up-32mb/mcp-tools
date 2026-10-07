@@ -384,32 +384,58 @@
 ## 3.9 `fs_search_text`
 
 ### 作用
-在文件或目录树中按子串搜索。
+在文件或目录树中搜索：默认按字面子串，`regex: true` 时按 Go 正则；默认启用根目录 `.gitignore` 过滤（`use_gitignore: false` 关闭）。
 
 ### 关键步骤
 1. 解析 `path`
 2. 校验 `query` 是 JSON string 且不是空字符串；不做 trim，空格/制表符等纯空白 query 仍是合法字面子串
-3. 若目标为文件，则单文件扫描
-4. 若目标为目录，则 `WalkDir`
-5. 非 `unsafe_allow_all` 模式下，对每个待读取文件重新做 allowed-root 校验，跳过指向范围外的符号链接
-6. 读取文件后按字节切分换行，不使用默认 64KiB token 上限的 `bufio.Scanner`
-7. 命中达到 limit 时提前停止并返回已收集的部分结果
+3. `regex: true` 时编译 `query` 为 Go `regexp`，编译失败返回 `invalid regex` 错误
+4. 读取根目录 `.gitignore`（存在且可读时）构造简化匹配器；`use_gitignore` 默认 `true`
+5. 若目标为文件，则单文件扫描
+6. 若目标为目录，则 `WalkDir`；目录/文件命中忽略规则时分别 `SkipDir` / 跳过该文件
+7. 非 `unsafe_allow_all` 模式下，对每个待读取文件重新做 allowed-root 校验，跳过指向范围外的符号链接
+8. 读取文件后按字节切分换行，不使用默认 64KiB token 上限的 `bufio.Scanner`
+9. 命中达到 limit 时提前停止并返回已收集的部分结果
 
 ### 边界说明
-- 当前是**子串匹配**，不是正则匹配
+- `regex` / `use_gitignore` 必须是 JSON boolean；非布尔值拒绝
 - `query` 必须是 JSON string；非字符串直接校验失败
 - `query == ""` 拒绝，schema 声明 `minLength: 1`；`strings.TrimSpace(query) == ""` 但原始 query 非空时允许搜索
 - `path` schema 声明 `minLength: 1`
-- `limit` 必须是整数；默认 200，最大 1000
-- `limit <= 0` 使用默认值 200，`limit > 1000` cap 到 1000
-- 目录模式不会通过文件符号链接读取 `allowed_roots` 外内容；`unsafe_allow_all=true` 时仍按 yolo 语义放开
-- 现在可以处理**超长单行**文件，不会因为 `bufio.Scanner: token too long` 直接失败
+- `limit` 必须是整数；默认 200，最大 1000；`limit <= 0` 用默认 200，`>1000` cap 到 1000
+- gitignore 匹配是 best-effort：精确路径 / `*` 通配 / `**/` 前缀 / 尾部 `/` 目录标记；`!` 取反、`?`、`[abc]`、嵌套、锚定 `/` 不支持；`!` 取反模式被显式跳过
+- 目录模式不会通过文件符号链接读取 `allowed_roots` 外内容；`unsafe_allow_all=true` 时按危险模式放开
+- 可以处理**超长单行**文件，不会因为 `bufio.Scanner: token too long` 直接失败
 
 ### 返回结构
 每个 match 包括：
 - `path`
 - `line`
 - `text`
+
+附加结构化字段：`regex`（本次是否正则模式）。
+
+---
+
+## 3.9.1 `fs_find_files`
+
+### 作用
+按 glob 模式递归查找文件，支持 `**` 跨层级模式，默认启用 `.gitignore` 过滤（`use_gitignore: false` 关闭）。
+
+### 关键步骤
+1. 解析 `path`（可指向单个文件或目录）
+2. 校验 `pattern` 是 JSON string 且非空白
+3. 判断模式是否含独立 `**` 段（`hasDoublestarSegment`）：含 `**` 时走跨层级段匹配（`matchDoublestarGlob`，`**` 消费零或多段、单 `*` 不跨 `/`），否则按既有 basename 递归匹配
+4. 构造 gitignore 匹配器（与 `fs_search_text` 共用 `loadGitignore` / `shouldIgnorePath`）
+5. `WalkDir` 遍历，目录命中忽略规则时 `SkipDir`
+6. 非 `unsafe_allow_all` 模式下，命中文件重新经 allowed-root 校验，跳过指向范围外的符号链接
+7. 每个命中写入 `path` / `name` / `size`；达到 `limit`（默认 100，最大 1000）提前停止
+
+### 边界说明
+- `**/*.go` 匹配根与所有子目录 `.go` 文件；`**/pkg/util.go` 中 `**` 可消费零段；`**/pkg/*.go` 只匹配 `pkg` 直下
+- `**.go` 非独立段按单段通配处理（等价 `*.go`），不触发跨层级语义
+- `?` / `[abc]` 按 `filepath.Match` 语义生效
+- 非法 glob 段按不匹配处理（与既有 per-entry 静默跳过一致）
 
 ### 副作用
 - 无通知
@@ -921,6 +947,32 @@ git pull --ff-only
 - `definition_not_resolved`
 - `position_out_of_bounds`
 - `path_outside_allowed_roots`
+
+---
+
+## 5.3 `exec_shell` 与后台进程管理工具（yolo 合并）
+
+这三个能力仅在 `unsafe_allow_all=true` 时注册为可用；关闭时调用返回 `feature disabled` 审计 + `requires unsafe_allow_all=true` 错误。
+
+### `exec_shell`
+- `command`（毕填）原样交给系统 shell：Unix `/bin/sh -c`，Windows `cmd.exe /C`
+- `workdir` 经过与 `exec_run` 相同的 `resolveWorkdir` 校验
+- `env` 合并时先删除同名旧条目再追加（避免重复 `KEY=value`，POSIX `execve` 重复 key 语义未定义）
+- `timeout_override_sec` 只能缩短 `command_timeout_sec`，不能延长
+- 结构化返回带 `mode: "shell"` 与原始 `command`
+
+### 后台进程管理
+- `exec_start_process`：`command` / `workdir` 毕填，`args` / `env` 可选；异步 `exec.CommandContext` + 分离的 stdout/stderr 缓冲，立即返回 `process_id`
+- `exec_list_processes`：返回全部进程 {id, state, pid, command}；state ∈ starting | running | exited | stopped
+- `exec_process_logs`：按 `id` 返回已捕获 stdout/stderr（固定上限缓冲，可反复读取）
+- `exec_stop_process`：先优雅终止（Unix 进程组 `SIGTERM`、Windows `taskkill /T`），5s 宽限期后升级强杀（`SIGKILL` / `taskkill /T /F`）；`force=true` 直接强杀；等待退出总超时 10s，不无限阻塞
+- `exec_remove_process`：仅移除已结束（exited/stopped）记录，运行中拒绝；防止进程表只增不减
+- 平台差异收敛在 `process_unix.go`（SIGTERM/SIGKILL 进程组）与 `process_windows.go`（`taskkill /T[/F]`、CreateProcess 隐藏窗口）
+
+### 审计与日志字段
+- `exec_shell`：`command` / `workdir`
+- `exec_start_process`：`command` / `workdir` / `args_count`
+- `exec_process_logs` / `exec_stop_process` / `exec_remove_process`：`process_id`
 
 ---
 

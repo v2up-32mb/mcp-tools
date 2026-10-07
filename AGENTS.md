@@ -191,8 +191,8 @@ data: {jsonrpc response or notification}
 - `fs_make_dir`
 - `fs_move_path`
 - `fs_delete_path`
-- `fs_search_text`
-- `fs_replace_text`
+- `fs_search_text`（支持正则与 `.gitignore` 过滤）
+- `fs_find_files`（glob 查找，支持 `**` 跨层级；默认 `.gitignore` 过滤）
 - `fs_apply_unified_diff`
 - `fs_edit_lines`
 - `fs_pull_file`
@@ -224,6 +224,8 @@ data: {jsonrpc response or notification}
 
 - `exec_run`
 - `exec_run_template`
+- `exec_shell`（**仅 `unsafe_allow_all=true`**：整条 shell 命令字符串，支持管道/重定向/环境变量展开）
+- `exec_start_process` / `exec_list_processes` / `exec_process_logs` / `exec_stop_process` / `exec_remove_process`（**仅 `unsafe_allow_all=true`**：后台进程管理）
 
 当前内置 preset 面向 Go：
 

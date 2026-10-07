@@ -320,14 +320,26 @@ func summarizeToolFields(name string, args map[string]any) []applog.Field {
 		fields = appendPathLikeField(fields, args, "repo_path", "repo_path")
 		fields = appendStringField(fields, args, "branch", "branch")
 		fields = appendPathsCountField(fields, args, "paths")
-	case name == "exec_run":
-		fields = appendStringField(fields, args, "preset", "preset")
-		fields = appendStringField(fields, args, "command", "command")
-		fields = appendPathLikeField(fields, args, "workdir", "workdir")
-		fields = appendArgsCountField(fields, args, "args")
-	case name == "exec_run_template":
-		fields = appendStringField(fields, args, "template", "template")
-		fields = appendPathLikeField(fields, args, "workdir", "workdir")
+	case strings.HasPrefix(name, "exec_"):
+		switch name {
+		case "exec_run":
+			fields = appendStringField(fields, args, "preset", "preset")
+			fields = appendStringField(fields, args, "command", "command")
+			fields = appendPathLikeField(fields, args, "workdir", "workdir")
+			fields = appendArgsCountField(fields, args, "args")
+		case "exec_run_template":
+			fields = appendStringField(fields, args, "template", "template")
+			fields = appendPathLikeField(fields, args, "workdir", "workdir")
+		case "exec_shell":
+			fields = appendStringField(fields, args, "command", "command")
+			fields = appendPathLikeField(fields, args, "workdir", "workdir")
+		case "exec_start_process":
+			fields = appendStringField(fields, args, "command", "command")
+			fields = appendPathLikeField(fields, args, "workdir", "workdir")
+			fields = appendArgsCountField(fields, args, "args")
+		case "exec_process_logs", "exec_stop_process", "exec_remove_process":
+			fields = appendStringField(fields, args, "id", "process_id")
+		}
 	case strings.HasPrefix(name, "go_"):
 		fields = appendPathLikeField(fields, args, "path", "path")
 		fields = appendIntField(fields, args, "line", "line")

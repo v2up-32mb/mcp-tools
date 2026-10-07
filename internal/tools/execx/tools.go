@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -49,7 +50,17 @@ type templateTool struct {
 }
 
 func NewTools(cfg config.Config) []mcp.Tool {
-	return []mcp.Tool{configuredTool{cfg: cfg}, templateTool{cfg: cfg}}
+	mgr := NewProcessManager()
+	return []mcp.Tool{
+		configuredTool{cfg: cfg},
+		templateTool{cfg: cfg},
+		startProcessTool{cfg: cfg, mgr: mgr},
+		listProcessesTool{cfg: cfg, mgr: mgr},
+		processLogsTool{cfg: cfg, mgr: mgr},
+		stopProcessTool{cfg: cfg, mgr: mgr},
+		removeProcessTool{cfg: cfg, mgr: mgr},
+		shellTool{cfg: cfg},
+	}
 }
 
 func (configuredTool) Name() string { return "exec_run" }
@@ -481,7 +492,18 @@ func mergeCommandEnv(base []string, fixed map[string]string) []string {
 	}
 	merged := util.CloneStrings(base)
 	for key, value := range fixed {
-		merged = append(merged, key+"="+value)
+		prefix := key + "="
+		// 先删除 base 中同 key 的旧条目，避免出现重复 KEY=value：
+		// Windows 取最后一个值，但 POSIX execve 对重复 key 的语义未定义，
+		// 部分实现取首个，会令 env 覆盖失效。
+		kept := merged[:0]
+		for _, entry := range merged {
+			if strings.HasPrefix(entry, prefix) {
+				continue
+			}
+			kept = append(kept, entry)
+		}
+		merged = append(kept, prefix+value)
 	}
 	return merged
 }
@@ -788,4 +810,61 @@ func ensureManagedEnvDirs(fixedEnv map[string]string) error {
 		}
 	}
 	return nil
+}
+
+// shellTool 执行 shell 命令字符串（支持管道、重定向、环境变量展开）。
+type shellTool struct {
+	cfg config.Config
+}
+
+func (shellTool) Name() string { return "exec_shell" }
+func (shellTool) Description() string {
+	return "Execute a shell command string (supports pipes, redirects, env expansion). Only available when unsafe_allow_all is enabled. Uses /bin/sh -c on Unix and cmd /C on Windows."
+}
+func (shellTool) ReadOnly() bool { return false }
+func (shellTool) Schema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"command":              map[string]any{"type": "string", "minLength": 1},
+			"workdir":              map[string]any{"type": "string", "minLength": 1},
+			"env":                  map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+			"timeout_override_sec": map[string]any{"type": "integer"},
+		},
+		"required": []string{"command", "workdir"},
+	}
+}
+
+func (t shellTool) Call(ctx context.Context, _ mcp.CallContext, args map[string]any) (mcp.Result, error) {
+	if !t.cfg.UnsafeAllowAll {
+		return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("exec_shell requires unsafe_allow_all=true"), mcp.AuditData{Allowed: true, ResultDigest: "feature disabled"})
+	}
+	command, err := requiredExecStringArg(args, "command")
+	if err != nil {
+		return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{Allowed: true, ResultDigest: "validation failed"})
+	}
+	resolvedWorkdir, rawWorkdir, err := resolveWorkdir(t.cfg, args)
+	if err != nil {
+		return mcp.Result{}, err
+	}
+	env, err := rawEnv(args["env"])
+	if err != nil {
+		return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{Workdir: resolvedWorkdir, Allowed: true, ResultDigest: "validation failed"})
+	}
+	timeout, err := applyTimeoutOverride(t.cfg.CommandTimeout, args["timeout_override_sec"])
+	if err != nil {
+		return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{Workdir: resolvedWorkdir, Allowed: true, ResultDigest: "validation failed"})
+	}
+	shell := "/bin/sh"
+	flag := "-c"
+	if runtime.GOOS == "windows" {
+		shell = "cmd.exe"
+		flag = "/C"
+	}
+	argv := []string{shell, flag, command}
+	return runExecCommand(ctx, t.cfg, "shell", "shell", argv, resolvedWorkdir, rawWorkdir, timeout, env, false, map[string]any{
+		"mode":    "shell",
+		"command": command,
+	})
 }

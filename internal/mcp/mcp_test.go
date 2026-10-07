@@ -470,3 +470,92 @@ func TestRegistryConcurrentRegisterAndCall(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestRegistryAuditSummarizesEnvForExecTools 锁定 unsafe 模式下新增 exec_* 工具
+// 与 exec_run 共用同一套审计脱敏：env 只落 key 与 count，明文值不进入 JSONL 审计。
+// 断言面向 json.Marshal(Event) 的真实落盘形态。
+func TestRegistryAuditSummarizesEnvForExecTools(t *testing.T) {
+	for _, toolName := range []string{"exec_shell", "exec_start_process", "exec_run"} {
+		t.Run(toolName, func(t *testing.T) {
+			logger := &captureLogger{}
+			registry := NewRegistry(logger)
+			registry.Register(staticTool{
+				name: toolName,
+				result: TextResult("ok", map[string]any{"summary": "ok"}, AuditData{
+					Allowed:      true,
+					ResultDigest: "ok",
+				}),
+			})
+
+			args := map[string]any{
+				"command": "echo",
+				"workdir": "/tmp/project",
+				"args":    []any{"a", "b"},
+				"env": map[string]any{
+					"DB_PASS":   "hunter2",
+					"API_TOKEN": "secret-value",
+				},
+			}
+			if _, err := registry.Call(context.Background(), CallContext{RequestID: "req-1"}, toolName, args); err != nil {
+				t.Fatalf("registry call failed: %v", err)
+			}
+			if len(logger.events) != 1 {
+				t.Fatalf("expected 1 audit event, got %d", len(logger.events))
+			}
+
+			payload, err := json.Marshal(logger.events[0])
+			if err != nil {
+				t.Fatalf("marshal audit event: %v", err)
+			}
+			for _, secret := range []string{"secret-value", "hunter2"} {
+				if strings.Contains(string(payload), secret) {
+					t.Fatalf("env value %q leaked into audit JSON: %s", secret, payload)
+				}
+			}
+
+			env, ok := logger.events[0].Arguments["env"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected env summary in audit arguments, got %#v", logger.events[0].Arguments)
+			}
+			if env["count"] != 2 {
+				t.Fatalf("expected env count 2, got %#v", env)
+			}
+			keys, _ := env["keys"].([]string)
+			if len(keys) != 2 || keys[0] != "API_TOKEN" || keys[1] != "DB_PASS" {
+				t.Fatalf("expected sorted env keys preserved, got %#v", env["keys"])
+			}
+
+			// 脱敏副本不得污染调用方 args（否则真实进程注入的 env 会被替换掉）
+			if args["env"].(map[string]any)["API_TOKEN"] != "secret-value" {
+				t.Fatalf("caller args mutated by redaction: %#v", args["env"])
+			}
+		})
+	}
+}
+
+// TestSummarizeToolFieldsCoversExecTools 锁定 summarizeToolFields 对新增
+// exec_* 工具的字段摘要：command / workdir / process id / args count。
+func TestSummarizeToolFieldsCoversExecTools(t *testing.T) {
+	collect := func(name string, args map[string]any) map[string]any {
+		got := map[string]any{}
+		for _, f := range summarizeToolFields(name, args) {
+			got[f.Key] = f.Value
+		}
+		return got
+	}
+
+	got := collect("exec_shell", map[string]any{"command": "make build", "workdir": "/tmp/p"})
+	if got["tool"] != "exec_shell" || got["command"] != "make build" || got["workdir"] != "/tmp/p" {
+		t.Fatalf("unexpected exec_shell fields: %#v", got)
+	}
+
+	got = collect("exec_start_process", map[string]any{"command": "go", "args": []any{"run", "."}})
+	if got["args_count"] != 2 || got["command"] != "go" {
+		t.Fatalf("unexpected exec_start_process fields: %#v", got)
+	}
+
+	got = collect("exec_stop_process", map[string]any{"id": "proc-1"})
+	if got["process_id"] != "proc-1" {
+		t.Fatalf("expected process_id proc-1, got %#v", got)
+	}
+}

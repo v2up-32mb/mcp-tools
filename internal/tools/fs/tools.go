@@ -6,19 +6,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/example/mcp-tools/internal/util"
 	iofs "io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/example/mcp-tools/internal/applog"
 	"github.com/example/mcp-tools/internal/config"
 	"github.com/example/mcp-tools/internal/mcp"
 	"github.com/example/mcp-tools/internal/numconv"
 	"github.com/example/mcp-tools/internal/pullfile"
 	"github.com/example/mcp-tools/internal/security"
-	"time"
+	"github.com/example/mcp-tools/internal/util"
 )
 
 type tool struct {
@@ -50,7 +52,8 @@ func NewTools(cfg config.Config, pull ...*pullfile.Manager) []mcp.Tool {
 		tool{name: "fs_make_dir", desc: "Create a directory recursively with mkdir -p semantics inside allowed roots.", schema: schemaPath(), call: makeDir(cfg)},
 		tool{name: "fs_move_path", desc: "Move or rename src to dst. Both src and dst must stay inside allowed roots; missing destination parents are created.", schema: schemaMove(), call: movePath(cfg)},
 		tool{name: "fs_delete_path", desc: "Delete a file or an empty directory. This is not recursive delete; non-empty directories will fail.", schema: schemaPath(), call: deletePath(cfg)},
-		tool{name: "fs_search_text", desc: "Search by plain substring in one file or recursively under a directory. Default limit is 200, max 1000, and long lines are supported.", schema: schemaSearch(), readOnly: true, call: searchText(cfg)},
+		tool{name: "fs_search_text", desc: "Search by plain substring or regex pattern in one file or recursively under a directory. Supports .gitignore filtering by default. Default limit is 200, max 1000, and long lines are supported.", schema: schemaSearch(), readOnly: true, call: searchText(cfg)},
+		tool{name: "fs_find_files", desc: "Find files matching a glob pattern recursively under a directory. Supports .gitignore filtering. Default limit is 100, max 1000.", schema: schemaFindFiles(), readOnly: true, call: findFiles(cfg)},
 		tool{name: "fs_replace_text", desc: "Replace exact old_text with new_text in one file. Supports replace-first or replace-all and can assert expected_replacements before writing.", schema: schemaReplaceText(), call: replaceText(cfg)},
 		tool{name: "fs_apply_unified_diff", desc: "Apply a standard unified diff to exactly one file using strict matching. path is passed separately, the diff header must match it, multiple hunks are allowed, dry_run validates without writing, and any hunk mismatch fails the whole patch with structured conflict details.", schema: schemaApplyUnifiedDiff(), call: applyUnifiedDiff(cfg)},
 		tool{name: "fs_edit_lines", desc: "Strictly replace a 1-based line range. new_text is interpreted as logical lines; blank lines are preserved, empty string deletes the range, and \"\n\" inserts one blank line. expected_old_text can be used as an optimistic concurrency check.", schema: schemaEditLines(), call: editLines(cfg)},
@@ -239,8 +242,35 @@ func searchText(cfg config.Config) func(context.Context, mcp.CallContext, map[st
 			}
 		}
 
+		regexMode, _, err := optionalBoolArg(args, "regex")
+		if err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		}
+		useGitignore := true // 默认启用 .gitignore 过滤，与 README 文档一致
+		if v, ok, err := optionalBoolArg(args, "use_gitignore"); err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		} else if ok {
+			useGitignore = v
+		}
+
+		var matcher func(string, string) bool
+		if regexMode {
+			re, compileErr := regexp.Compile(query)
+			if compileErr != nil {
+				return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("invalid regex: %w", compileErr), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+			}
+			matcher = func(line, _ string) bool {
+				return re.MatchString(line)
+			}
+		} else {
+			matcher = func(line, q string) bool {
+				return strings.Contains(line, q)
+			}
+		}
+
 		matches := make([]map[string]any, 0)
-		err = walkSearch(ctx, path, query, limit, cfg, &matches)
+		gitignore, _ := loadGitignore(path)
+		err = walkSearch(ctx, path, query, limit, matcher, gitignore, useGitignore, cfg, &matches)
 		if err != nil && !errors.Is(err, errSearchLimitReached) {
 			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "search failed"})
 		}
@@ -257,7 +287,64 @@ func searchText(cfg config.Config) func(context.Context, mcp.CallContext, map[st
 			"summary": summary,
 			"path":    path,
 			"query":   query,
+			"regex":   regexMode,
 			"matches": matches,
+		}, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: summary}), nil
+	}
+}
+
+func findFiles(cfg config.Config) func(context.Context, mcp.CallContext, map[string]any) (mcp.Result, error) {
+	return func(ctx context.Context, _ mcp.CallContext, args map[string]any) (mcp.Result, error) {
+		path, err := resolvePathArg(args, "path", cfg)
+		if err != nil {
+			return mcp.Result{}, err
+		}
+		pattern, err := requiredStringArg(args, "pattern")
+		if err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		}
+		if strings.TrimSpace(pattern) == "" {
+			return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("pattern required"), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		}
+		limit := 100
+		if v, ok, err := optionalIntArg(args, "limit"); err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		} else if ok {
+			switch {
+			case v <= 0:
+				limit = 100
+			case v > 1000:
+				limit = 1000
+			default:
+				limit = v
+			}
+		}
+		useGitignore := true // 默认启用 .gitignore 过滤，与 README 文档一致
+		if v, ok, err := optionalBoolArg(args, "use_gitignore"); err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
+		} else if ok {
+			useGitignore = v
+		}
+
+		entries := make([]map[string]any, 0)
+		gitignore, _ := loadGitignore(path)
+		if err := walkGlob(ctx, path, pattern, limit, gitignore, useGitignore, cfg, &entries); err != nil {
+			return mcp.Result{}, mcp.WrapToolError(err, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "find_files failed"})
+		}
+		summary := fmt.Sprintf("found %d files", len(entries))
+		text := summary
+		if len(entries) > 0 {
+			rows := make([]string, 0, len(entries))
+			for _, entry := range entries {
+				rows = append(rows, entry["path"].(string))
+			}
+			text = strings.Join(rows, "\n")
+		}
+		return mcp.TextResult(text, map[string]any{
+			"summary": summary,
+			"path":    path,
+			"pattern": pattern,
+			"files":   entries,
 		}, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: summary}), nil
 	}
 }
@@ -504,13 +591,155 @@ func resolvePathArgWithMode(args map[string]any, key string, cfg config.Config, 
 	return resolved, nil
 }
 
-func walkSearch(ctx context.Context, path string, query string, limit int, cfg config.Config, matches *[]map[string]any) error {
+// --- Search Enhancements ---
+
+var errSearchLimitReached = errors.New("search limit reached")
+
+type gitignoreMatcher struct {
+	patterns []string
+}
+
+func loadGitignore(root string) (*gitignoreMatcher, error) {
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		return nil, nil
+	}
+	gitignorePath := filepath.Join(root, ".gitignore")
+	data, err := os.ReadFile(gitignorePath)
+	if err != nil {
+		// .gitignore 存在但读取失败时不再完全静默：debug 日志提示，
+		// 过滤按关闭处理（返回 nil matcher），不影响搜索本身。
+		if !errors.Is(err, os.ErrNotExist) {
+			applog.Default().Debug("fs.search", "failed to read .gitignore; gitignore filtering disabled for this search",
+				applog.Field{Key: "path", Value: gitignorePath},
+				applog.Field{Key: "error", Value: err.Error()})
+		}
+		return nil, nil
+	}
+	return &gitignoreMatcher{patterns: parseGitignore(string(data))}, nil
+}
+
+func parseGitignore(content string) []string {
+	var patterns []string
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// 显式跳过 ! 取反模式（当前实现不支持取反，与 README 声明一致），
+		// 避免把 "!keep.log" 当作忽略模式误杀 keep.log。
+		if strings.HasPrefix(line, "!") {
+			continue
+		}
+		patterns = append(patterns, line)
+	}
+	return patterns
+}
+
+func (g *gitignoreMatcher) ShouldIgnore(path string) bool {
+	if g == nil {
+		return false
+	}
+	for _, pattern := range g.patterns {
+		if matchGitignorePattern(pattern, path) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchGitignorePattern(pattern, path string) bool {
+	// Simple gitignore matching: handle ** and * wildcards
+	if pattern == path {
+		return true
+	}
+	// 去掉目录标记后缀 "/"（"vendor/" 与 "vendor" 语义一致：目录整体忽略）
+	pattern = strings.TrimSuffix(pattern, "/")
+
+	if strings.HasPrefix(pattern, "**/") {
+		// **/X：X 是相对任意深度的模式（可含多段与 * 通配），
+		// 匹配整个路径（根层级）或任意 "/" 边界后的后缀。
+		rest := pattern[3:]
+		if rest == "" {
+			return false
+		}
+		if matchGitignoreRelative(rest, path) {
+			return true
+		}
+		for i := 0; i < len(path); i++ {
+			if path[i] == '/' && matchGitignoreRelative(rest, path[i+1:]) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if !strings.Contains(pattern, "*") {
+		// 无通配符的纯名字：真实 gitignore 语义是目录整体忽略
+		if path == pattern || strings.HasPrefix(path, pattern+"/") {
+			return true
+		}
+		// best-effort 保留既有 basename 匹配（文件名模式在任意层级生效）
+		return filepath.Base(path) == pattern
+	}
+	// Simple wildcard support
+	matched, _ := filepath.Match(pattern, filepath.Base(path))
+	return matched
+}
+
+// matchGitignoreRelative 匹配一个相对模式（无前导 /、无 **，可含 * 与多段）
+// 与相对路径后缀。用于 **/ 前缀分支。
+func matchGitignoreRelative(rest, suffix string) bool {
+	if strings.Contains(rest, "*") {
+		// 单星通配：先按相对路径整体匹配（filepath.Match 的 * 不跨 /），
+		// 再回退到 basename 匹配，覆盖深层级文件（如 "**/test_*.py" 匹配 "pkg/test_a.py"）。
+		if m, _ := filepath.Match(rest, suffix); m {
+			return true
+		}
+		m, _ := filepath.Match(rest, filepath.Base(suffix))
+		return m
+	}
+	// 纯多段名字：等于该路径或以其为目录前缀（子树忽略）
+	return suffix == rest || strings.HasPrefix(suffix, rest+"/")
+}
+
+func shouldIgnorePath(path string, root string, gitignore *gitignoreMatcher, useGitignore bool) bool {
+	if !useGitignore || gitignore == nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	// Windows 上 filepath.Rel 返回反斜杠路径；模式匹配统一按 "/" 语义处理
+	rel = filepath.ToSlash(rel)
+	return gitignore.ShouldIgnore(rel)
+}
+
+// resolveWalkPath 在非 unsafe 模式下把 walk 命中的条目重新经 allowed roots 校验，
+// 防止 symlink 指向 allowed roots 之外；unsafe 模式保持原样。
+func resolveWalkPath(current string, cfg config.Config) (string, bool) {
+	if cfg.UnsafeAllowAll {
+		return current, true
+	}
+	resolved, err := security.ResolvePath(current, cfg.AllowedRoots)
+	if err != nil {
+		return "", false
+	}
+	return resolved, true
+}
+
+func walkSearch(ctx context.Context, path string, query string, limit int, matcher func(string, string) bool, gitignore *gitignoreMatcher, useGitignore bool, cfg config.Config, matches *[]map[string]any) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
 	if !info.IsDir() {
-		return searchSingleFile(path, query, limit, matches)
+		searchPath, ok := resolveWalkPath(path, cfg)
+		if !ok {
+			return nil
+		}
+		return searchSingleFile(searchPath, query, limit, matcher, matches)
 	}
 	return filepath.WalkDir(path, func(current string, entry iofs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -521,18 +750,20 @@ func walkSearch(ctx context.Context, path string, query string, limit int, cfg c
 			return ctx.Err()
 		default:
 		}
+		if shouldIgnorePath(current, path, gitignore, useGitignore) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if entry.IsDir() {
 			return nil
 		}
-		searchPath := current
-		if !cfg.UnsafeAllowAll {
-			resolved, err := security.ResolvePath(current, cfg.AllowedRoots)
-			if err != nil {
-				return nil
-			}
-			searchPath = resolved
+		searchPath, ok := resolveWalkPath(current, cfg)
+		if !ok {
+			return nil
 		}
-		if err := searchSingleFile(searchPath, query, limit, matches); err != nil {
+		if err := searchSingleFile(searchPath, query, limit, matcher, matches); err != nil {
 			if errors.Is(err, errSearchLimitReached) {
 				return filepath.SkipAll
 			}
@@ -542,9 +773,7 @@ func walkSearch(ctx context.Context, path string, query string, limit int, cfg c
 	})
 }
 
-var errSearchLimitReached = errors.New("search limit reached")
-
-func searchSingleFile(path string, query string, limit int, matches *[]map[string]any) error {
+func searchSingleFile(path string, query string, limit int, matcher func(string, string) bool, matches *[]map[string]any) error {
 	payload, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -553,7 +782,7 @@ func searchSingleFile(path string, query string, limit int, matches *[]map[strin
 	for _, lineBytes := range splitLinesBytes(payload) {
 		lineNo++
 		line := string(lineBytes)
-		if strings.Contains(line, query) {
+		if matcher(line, query) {
 			*matches = append(*matches, map[string]any{
 				"path": path,
 				"line": lineNo,
@@ -565,6 +794,135 @@ func searchSingleFile(path string, query string, limit int, matches *[]map[strin
 		}
 	}
 	return nil
+}
+
+func walkGlob(ctx context.Context, root string, pattern string, limit int, gitignore *gitignoreMatcher, useGitignore bool, cfg config.Config, entries *[]map[string]any) error {
+	// ** 跨层级 glob（CORR-5）：模式含独立 ** 段时按相对路径分段匹配；
+	// 否则保持既有语义（递归遍历 + basename 匹配，单 * 不跨 /）。
+	doublestar := hasDoublestarSegment(pattern)
+	info, err := os.Stat(root)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		var matched bool
+		if doublestar {
+			// 单文件根：相对路径即文件名，** 支持零段前缀（**/x 匹配 x）
+			matched = matchDoublestarGlob(pattern, filepath.ToSlash(info.Name()))
+		} else {
+			matched, err = filepath.Match(pattern, info.Name())
+			if err != nil {
+				return err
+			}
+		}
+		if matched {
+			if resolved, ok := resolveWalkPath(root, cfg); ok {
+				*entries = append(*entries, map[string]any{
+					"path": resolved,
+					"name": info.Name(),
+					"size": fileSize(info),
+				})
+			}
+		}
+		return nil
+	}
+
+	return filepath.WalkDir(root, func(current string, entry iofs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if shouldIgnorePath(current, root, gitignore, useGitignore) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		var matched bool
+		if doublestar {
+			// ** 模式：按相对路径（Windows 反斜杠 ToSlash 归一化）跨段匹配
+			rel, relErr := filepath.Rel(root, current)
+			if relErr != nil {
+				return nil
+			}
+			matched = matchDoublestarGlob(pattern, filepath.ToSlash(rel))
+		} else {
+			// 既有语义：递归遍历 + basename 匹配（单 * 不跨 /）
+			m, err := filepath.Match(pattern, entry.Name())
+			if err != nil {
+				return nil
+			}
+			matched = m
+		}
+		if matched {
+			resolved, ok := resolveWalkPath(current, cfg)
+			if !ok {
+				return nil
+			}
+			info, _ := entry.Info()
+			*entries = append(*entries, map[string]any{
+				"path": resolved,
+				"name": entry.Name(),
+				"size": fileSize(info),
+			})
+			if len(*entries) >= limit {
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
+}
+
+// hasDoublestarSegment 报告模式是否包含独立的 ** 段（跨层级 glob）。
+// 仅完整段 "**" 生效；"**.go" 这类非独立段按单段通配处理（等价 *.go）。
+func hasDoublestarSegment(pattern string) bool {
+	for _, seg := range strings.Split(pattern, "/") {
+		if seg == "**" {
+			return true
+		}
+	}
+	return false
+}
+
+// matchDoublestarGlob 以 ** 跨段语义匹配斜杠分隔的相对路径：
+// ** 段匹配任意数量（含零）的路径段——**/*.go 匹配根目录与所有子目录的 .go 文件；
+// 单 * 段不跨 /（filepath.Match 语义）。非法模式段按不匹配处理，
+// 与既有 per-entry 静默跳过行为一致。
+func matchDoublestarGlob(pattern, relPath string) bool {
+	return matchGlobSegments(strings.Split(pattern, "/"), strings.Split(relPath, "/"))
+}
+
+// matchGlobSegments 递归匹配模式段与路径段；** 段尝试消费零或多段路径。
+func matchGlobSegments(pattern, path []string) bool {
+	for len(pattern) > 0 {
+		if pattern[0] == "**" {
+			// ** 匹配零或多段：逐一起点尝试剩余模式段
+			rest := pattern[1:]
+			for i := 0; i <= len(path); i++ {
+				if matchGlobSegments(rest, path[i:]) {
+					return true
+				}
+			}
+			return false
+		}
+		if len(path) == 0 {
+			return false
+		}
+		matched, err := filepath.Match(pattern[0], path[0])
+		if err != nil || !matched {
+			return false
+		}
+		pattern = pattern[1:]
+		path = path[1:]
+	}
+	return len(path) == 0
 }
 
 func splitLinesBytes(payload []byte) [][]byte {
@@ -812,11 +1170,27 @@ func schemaSearch() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"path":  nonEmptyStringSchema(),
-			"query": nonEmptyStringSchema(),
-			"limit": map[string]any{"type": "integer"},
+			"path":          nonEmptyStringSchema(),
+			"query":         nonEmptyStringSchema(),
+			"limit":         map[string]any{"type": "integer"},
+			"regex":         map[string]any{"type": "boolean"},
+			"use_gitignore": map[string]any{"type": "boolean"},
 		},
 		"required": []string{"path", "query"},
+	}
+}
+
+func schemaFindFiles() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"path":          nonEmptyStringSchema(),
+			"pattern":       nonEmptyStringSchema(),
+			"limit":         map[string]any{"type": "integer"},
+			"use_gitignore": map[string]any{"type": "boolean"},
+		},
+		"required": []string{"path", "pattern"},
 	}
 }
 

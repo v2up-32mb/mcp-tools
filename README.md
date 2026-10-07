@@ -7,6 +7,7 @@
 > 本仓库默认配置 `unsafe_allow_all: true`，启用后：
 > - `fs.*` 工具可访问 `allowed_roots` 之外的任意文件路径
 > - `exec_run` 可执行任意 `command + args + env`（不再限于 Go preset）
+> - `exec_shell` / `exec_start_process` / `exec_list_processes` / `exec_process_logs` / `exec_stop_process` / `exec_remove_process` 可用（任意 shell 命令 + 后台进程管理）
 > - `git.*` 的 `repo_path` 可以指向任意 Git 仓库
 > - 模板的 `requires_confirmation` 和 `allowed_workdirs` 限制被旁路
 >
@@ -58,6 +59,7 @@ unsafe_allow_all: true
   - `fs_move_path`
   - `fs_delete_path`
   - `fs_search_text`
+  - `fs_find_files`
   - `fs_replace_text`
   - `fs_apply_unified_diff`
   - `fs_edit_lines`
@@ -78,6 +80,8 @@ unsafe_allow_all: true
 - **Exec 工具**
   - `exec_run`
   - `exec_run_template`
+  - `exec_shell`（`unsafe_allow_all=true` 时可用，支持管道/重定向/环境变量展开）
+  - `exec_start_process` / `exec_list_processes` / `exec_process_logs` / `exec_stop_process` / `exec_remove_process`（后台进程管理，`unsafe_allow_all=true` 时可用）
 - 仅开放 Go preset：`go_fmt` / `go_mod_download` / `go_test` / `go_generate` / `go_build` / `go_vet` / `go_mod_tidy` / `go_get` / `go_list` / `go_work_sync`
 - 同时支持固定白名单命令模板：`make_test` / `make_build` / `go_clean_testcache`（默认要求 `confirm=true`）
 - 文件拉取：`fs_pull_file` 签发 HMAC 签名、短时效、可限次的下载 URL，客户端通过 `GET /file/<token>` 流式下载；支持扩展名白名单与大小上限
@@ -833,7 +837,8 @@ curl -s http://127.0.0.1:8080/mcp \
 
 `fs_search_text` 的使用细节：
 
-- 当前是**按子串匹配**，不是正则
+- 支持**字面量子串**与**正则表达式**两种匹配模式：默认按子串匹配，传 `regex: true` 时把 `query` 当作 Go 正则编译
+- `regex` 是 JSON boolean；正则编译失败会按 `invalid regex` 拒绝，不会静默回退到子串匹配
 - `query` 必须是 JSON string，且只要求不是空字符串；工具 schema 声明 `minLength: 1`，空格、制表符等纯空白子串会按字面量搜索
 - `path` 可以是单个文件，也可以是目录；工具 schema 声明 `minLength: 1`
 - 目录模式下会递归搜索
@@ -841,6 +846,79 @@ curl -s http://127.0.0.1:8080/mcp \
 - 默认 `limit=200`，最大支持到 `1000`
 - 命中达到 `limit` 后会停止搜索，并返回已收集的部分结果
 - 现在已支持**超长单行**文件，不会因为默认 `bufio.Scanner` 的 64KiB 限制直接失败
+
+**`.gitignore` 过滤（默认开启）：**
+
+- 搜索目录时会读取根目录下的 `.gitignore` 并跳过匹配的路径；传 `use_gitignore: false` 可关闭
+- 匹配是 best-effort 简化实现：仅支持根目录 `.gitignore`，支持精确路径、`*` 通配、`**/ `前缀、尾部 `/` 目录标记；**不支持** `!` 取反、`?`、`[abc]` 字符类、嵌套 `.gitignore` 或锚定 `/`
+- `!` 取反模式会被显式跳过，因此 `!keep.log` 不会再被当成忽略模式误杀
+- 目录命中忽略规则时按子树整棵跳过
+- 读取 `.gitignore` 失败（非 `os.ErrNotExist`）会写一条 DEBUG 日志并关闭本次过滤，不影响搜索本身
+
+示例（正则搜索）：
+
+```bash
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer change-me' \
+  -H "Mcp-Session-Id: ${SESSION_ID}" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 10,
+    "method": "tools/call",
+    "params": {
+      "name": "fs_search_text",
+      "arguments": {
+        "path": ".",
+        "query": "func\\s+\\w+\\s*\\(",
+        "regex": true,
+        "limit": 50
+      }
+    }
+  }'
+```
+
+### 11.2.1 fs_find_files
+
+`fs_find_files` 按 glob 模式递归查找文件：
+
+- `path`：搜索根，可以是单个文件或目录（schema 声明 `minLength: 1`）
+- `pattern`：glob 模式，必填且非空白（schema 声明 `minLength: 1`）
+- `limit`：默认 `100`，最大 `1000`；`<=0` 回退默认，`>1000` 钳制到 `1000`；命中达到上限即停止遍历并返回已收集结果
+- 返回 `files[]`，每项含 `path` / `name` / `size`
+
+**glob 语义：**
+
+- 模式包含独立的 `**` 段时启用**跨层级匹配**：`**` 匹配任意层级（含**零层**）。`**/*.go` 匹配根目录与所有子目录的 `.go` 文件；`**/pkg/util.go` 匹配 `pkg/util.go`（`**` 消费零段）
+- 单个 `*` **不跨 `/`**：`**/pkg/*.go` 只匹配 `pkg` 直下，不含更深子目录
+- 不含 `**` 段的模式保持既有语义：递归遍历目录 + 对文件 basename 做 `filepath.Match`
+- `?` 与 `[abc]` 字符类按 `filepath.Match` 语义生效
+- `**.go` 这类非独立段不触发跨层级语义，按单段通配处理（等价 `*.go`）
+- 非 `unsafe_allow_all` 模式下，每个命中文件都会重新经 `allowed_roots` 校验，指向根外的符号链接会被静默跳过
+
+**`.gitignore` 过滤：** 与 `fs_search_text` 共用同一实现，默认开启，`use_gitignore: false` 关闭。
+
+示例：
+
+```bash
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer change-me' \
+  -H "Mcp-Session-Id: ${SESSION_ID}" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 11,
+    "method": "tools/call",
+    "params": {
+      "name": "fs_find_files",
+      "arguments": {
+        "path": ".",
+        "pattern": "**/*.go",
+        "limit": 100
+      }
+    }
+  }'
+```
 
 ### 11.3 fs_move_path / fs_delete_path
 
@@ -1033,6 +1111,89 @@ curl -o ./progress.png "https://files.example.com/mcp-tools/file/<token>"
 - 下载 URL 是唯一授权凭据：**持有 URL 即有权下载**，请勿转发；有效期与次数由 `pull_file.url.*` 控制
 - 服务重启后所有已签发 URL 立即失效
 - 每次下载都会写入一条 `fs_pull_file.download` 审计事件
+
+### 12.5 exec_shell
+
+`exec_shell` 执行**整条 shell 命令字符串**，补齐 `exec_run` 无法表达管道/重定向的缺口：
+
+- **仅在 `unsafe_allow_all=true` 时可用**；关闭时调用返回 `exec_shell requires unsafe_allow_all=true`，且记为 `feature disabled` 审计
+- Unix 使用 `/bin/sh -c`，Windows 使用 `cmd.exe /C`，因此管道、`>`、`&&`、环境变量展开都由系统 shell 处理
+- `command` 必填且非空白；`workdir` 必填
+- `env` 为 `map[string]string`，会与基础环境合并；合并时**先删除同名旧条目再追加**，避免出现重复 `KEY=value`（POSIX `execve` 对重复 key 语义未定义，可能导致 env 覆盖失效）
+- `timeout_override_sec` 只能**缩短**执行时间，不能超过 `command_timeout_sec` 配置
+- 审计与 `exec_run` 共用同一脱敏链路：`env` 只落 `keys` 与 `count`，**明文值不进入 JSONL 审计与控制台日志**
+- 返回结构化字段含 `mode: "shell"` 与原始 `command`
+
+示例：
+
+```bash
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer change-me' \
+  -H "Mcp-Session-Id: ${SESSION_ID}" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 20,
+    "method": "tools/call",
+    "params": {
+      "name": "exec_shell",
+      "arguments": {
+        "command": "go build ./... 2>&1 | tail -20",
+        "workdir": ".",
+        "timeout_override_sec": 120
+      }
+    }
+  }'
+```
+
+### 12.6 后台进程管理（exec_start_process 等）
+
+这组工具让 agent 能在 **不阻塞单次调用** 的前提下跑长任务（dev server、watch、长时间构建）：
+
+| 工具 | 作用 | 关键参数 |
+| --- | --- | --- |
+| `exec_start_process` | 异步启动后台进程，立即返回进程 ID | `command`（必填）、`args`、`env`、`workdir`（必填） |
+| `exec_list_processes` | 列出全部后台进程及其状态、pid | 无 |
+| `exec_process_logs` | 取回后台进程已捕获的 stdout/stderr | `id`（必填） |
+| `exec_stop_process` | 停止后台进程 | `id`（必填）、`force` |
+| `exec_remove_process` | 从进程表移除**已结束**的进程记录 | `id`（必填） |
+
+共同约束：
+
+- 五个工具**都要求 `unsafe_allow_all=true`**，否则返回 `feature disabled` 审计并附带明确的 `requires unsafe_allow_all=true` 错误
+- 输出按进程缓冲并在总量上限处截断；`exec_process_logs` 可反复读取同一缓冲区
+- `exec_stop_process` 执行**真正的进程树终止**：非 `force` 时先优雅终止（Unix 对进程组发 `SIGTERM`，Windows 用 `taskkill /T`）并给 5s 宽限期，超时升级为强杀；`force=true` 直接强杀进程树（Windows `taskkill /T /F`，Unix 进程组 `SIGKILL`）。等待退出有 10s 总超时，**不会无限阻塞**
+- `exec_remove_process` 拒绝移除仍在运行的进程，只清理已结束的记录，避免进程表只增不减
+- `id` 类参数在审计与控制台日志中记为 `process_id`，`exec_start_process` 记为 `command` / `workdir` / `args_count`
+
+示例：
+
+```bash
+# 1. 启动
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer change-me' \
+  -H "Mcp-Session-Id: ${SESSION_ID}" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0", "id": 21, "method": "tools/call",
+    "params": {"name": "exec_start_process", "arguments": {
+      "command": "go", "args": ["run", "./cmd/server"], "workdir": "."
+    }}
+  }'
+
+# 2. 读日志（把 <id> 换成返回的进程 ID）
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer change-me' \
+  -H "Mcp-Session-Id: ${SESSION_ID}" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0", "id": 22, "method": "tools/call",
+    "params": {"name": "exec_process_logs", "arguments": {"id": "<id>"}}
+  }'
+
+# 3. 停止并清理
+#    exec_stop_process -> exec_remove_process
+```
 
 ## 13. Go 导航工具
 

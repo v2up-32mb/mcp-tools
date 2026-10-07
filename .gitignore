@@ -18,6 +18,10 @@ cover.out
 bin/
 dist/
 
+# AgentTeams state and review reports (local collaboration artifacts)
+.agent-teams/
+final-review-report.md
+
 # Editor / OS junk
 .DS_Store
 .idea/
