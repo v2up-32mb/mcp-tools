@@ -1,0 +1,104 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---- 单元测试 + 静态检查（Go 1.20 = 支持 Windows 7 的最后一个 Go 版本）----
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.20.14
+          cache: true
+      - name: gofmt 检查
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "以下文件未通过 gofmt："
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test -race ./...
+
+  # ---- 跨平台构建矩阵（CGO_ENABLED=0 单文件二进制；GOAMD64=v1 兼容 Win7 老 CPU）----
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+            goamd64: v1
+            artifact: mcp-tools-windows-amd64.exe
+          - goos: linux
+            goarch: amd64
+            goamd64: v1
+            artifact: mcp-tools-linux-amd64
+          - goos: darwin
+            goarch: amd64
+            goamd64: v1
+            artifact: mcp-tools-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            goamd64: v1
+            artifact: mcp-tools-darwin-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.20.14
+          cache: true
+      - name: 构建 ${{ matrix.goos }}/${{ matrix.goarch }}
+        run: |
+          CGO_ENABLED=0 \
+          GOOS=${{ matrix.goos }} \
+          GOARCH=${{ matrix.goarch }} \
+          GOAMD64=${{ matrix.goamd64 }} \
+          go build -trimpath -ldflags "-s -w" \
+            -o dist/${{ matrix.artifact }} ./cmd/mcp-tools
+      - name: 校验产物
+        run: file dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  # ---- 打 tag v* 时发布 Release（含 SHA256 校验和）----
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 下载全部构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: 生成 SHA256 校验和
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: 发布到 GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

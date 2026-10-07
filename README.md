@@ -1,6 +1,10 @@
 # mcp-tools
 
+![CI](https://github.com/v2up-32mb/mcp-tools/actions/workflows/ci.yml/badge.svg)
+
 一个基于 Go 1.20 的单体 MCP HTTP 服务，提供文件系统、Git、Go 导航与命令执行能力，供远程 AI 代理通过 MCP 调用本地工具。
+
+> 目标平台：**Windows 7 SP1 x64**（Go 1.20 是支持 Win7 的最后一个 Go 版本；`CGO_ENABLED=0`、`GOAMD64=v1` 单文件二进制，无需 Python / Node / .NET 运行时）
 
 > ⚠️ **安全警告：`unsafe_allow_all` 默认启用**
 >
