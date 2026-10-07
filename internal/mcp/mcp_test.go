@@ -11,15 +11,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/mcp-tools/internal/applog"
-	"github.com/example/mcp-tools/internal/audit"
+	"github.com/v2up-32mb/mcp-tools/internal/applog"
+	"github.com/v2up-32mb/mcp-tools/internal/audit"
 )
 
 type captureLogger struct {
+	mu     sync.Mutex
 	events []audit.Event
 }
 
 func (c *captureLogger) Write(ev audit.Event) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.events = append(c.events, ev)
 	return nil
 }
