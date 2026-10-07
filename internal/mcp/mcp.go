@@ -6,15 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/example/mcp-tools/internal/util"
+	"github.com/v2up-32mb/mcp-tools/internal/util"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/example/mcp-tools/internal/applog"
-	"github.com/example/mcp-tools/internal/audit"
-	"github.com/example/mcp-tools/internal/numconv"
+	"github.com/v2up-32mb/mcp-tools/internal/applog"
+	"github.com/v2up-32mb/mcp-tools/internal/audit"
+	"github.com/v2up-32mb/mcp-tools/internal/numconv"
 )
 
 var ErrUnknownTool = errors.New("unknown tool")

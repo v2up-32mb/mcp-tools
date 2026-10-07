@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/example/mcp-tools/internal/util"
+	"github.com/v2up-32mb/mcp-tools/internal/util"
 	"io"
 	"mime"
 	"net/http"
@@ -16,11 +16,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/example/mcp-tools/internal/config"
-	"github.com/example/mcp-tools/internal/mcp"
-	"github.com/example/mcp-tools/internal/pullfile"
-	"github.com/example/mcp-tools/internal/security"
-	"github.com/example/mcp-tools/internal/session"
+	"github.com/v2up-32mb/mcp-tools/internal/config"
+	"github.com/v2up-32mb/mcp-tools/internal/mcp"
+	"github.com/v2up-32mb/mcp-tools/internal/pullfile"
+	"github.com/v2up-32mb/mcp-tools/internal/security"
+	"github.com/v2up-32mb/mcp-tools/internal/session"
 )
 
 const sessionHeader = "Mcp-Session-Id"

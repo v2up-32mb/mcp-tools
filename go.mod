@@ -1,4 +1,4 @@
-module github.com/example/mcp-tools
+module github.com/v2up-32mb/mcp-tools
 
 go 1.20
 

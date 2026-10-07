@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/mcp-tools/internal/config"
-	"github.com/example/mcp-tools/internal/mcp"
+	"github.com/v2up-32mb/mcp-tools/internal/config"
+	"github.com/v2up-32mb/mcp-tools/internal/mcp"
 )
 
 // crossPlatformEnvDump 返回能列出环境变量的命令（Windows 用 cmd set，Unix 用 sh env）。

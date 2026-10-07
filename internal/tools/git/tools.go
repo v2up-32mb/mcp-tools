@@ -6,15 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/example/mcp-tools/internal/util"
+	"github.com/v2up-32mb/mcp-tools/internal/util"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"github.com/example/mcp-tools/internal/config"
-	"github.com/example/mcp-tools/internal/mcp"
-	"github.com/example/mcp-tools/internal/numconv"
-	"github.com/example/mcp-tools/internal/security"
+	"github.com/v2up-32mb/mcp-tools/internal/config"
+	"github.com/v2up-32mb/mcp-tools/internal/mcp"
+	"github.com/v2up-32mb/mcp-tools/internal/numconv"
+	"github.com/v2up-32mb/mcp-tools/internal/security"
 )
 
 type tool struct {

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/example/mcp-tools/internal/numconv"
+	"github.com/v2up-32mb/mcp-tools/internal/numconv"
 )
 
 // CloneStrings returns a copy of values, or nil if values is nil.

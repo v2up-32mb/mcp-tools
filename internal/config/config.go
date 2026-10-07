@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/example/mcp-tools/internal/util"
+	"github.com/v2up-32mb/mcp-tools/internal/util"
 	"io"
 	"net/url"
 	"os"

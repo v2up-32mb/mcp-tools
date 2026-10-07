@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/example/mcp-tools/internal/applog"
+	"github.com/v2up-32mb/mcp-tools/internal/applog"
 )
 
 type debugResponseRecorder struct {

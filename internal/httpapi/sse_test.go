@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/mcp-tools/internal/config"
+	"github.com/v2up-32mb/mcp-tools/internal/config"
 )
 
 func parseSSEData(t *testing.T, body string) rpcResponse {

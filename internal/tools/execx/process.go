@@ -14,10 +14,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/example/mcp-tools/internal/config"
-	"github.com/example/mcp-tools/internal/mcp"
-	"github.com/example/mcp-tools/internal/security"
-	"github.com/example/mcp-tools/internal/util"
+	"github.com/v2up-32mb/mcp-tools/internal/config"
+	"github.com/v2up-32mb/mcp-tools/internal/mcp"
+	"github.com/v2up-32mb/mcp-tools/internal/security"
+	"github.com/v2up-32mb/mcp-tools/internal/util"
 )
 
 // ProcessState 描述一个后台进程的运行状态。

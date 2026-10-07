@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/mcp-tools/internal/config"
+	"github.com/v2up-32mb/mcp-tools/internal/config"
 )
 
 var pngMagic = "\x89PNG\r\n\x1a\n" + strings.Repeat("x", 64)

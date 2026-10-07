@@ -12,16 +12,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/example/mcp-tools/internal/applog"
-	"github.com/example/mcp-tools/internal/audit"
-	"github.com/example/mcp-tools/internal/config"
-	"github.com/example/mcp-tools/internal/httpapi"
-	"github.com/example/mcp-tools/internal/mcp"
-	"github.com/example/mcp-tools/internal/pullfile"
-	execx "github.com/example/mcp-tools/internal/tools/execx"
-	fstools "github.com/example/mcp-tools/internal/tools/fs"
-	gittools "github.com/example/mcp-tools/internal/tools/git"
-	golangx "github.com/example/mcp-tools/internal/tools/golangx"
+	"github.com/v2up-32mb/mcp-tools/internal/applog"
+	"github.com/v2up-32mb/mcp-tools/internal/audit"
+	"github.com/v2up-32mb/mcp-tools/internal/config"
+	"github.com/v2up-32mb/mcp-tools/internal/httpapi"
+	"github.com/v2up-32mb/mcp-tools/internal/mcp"
+	"github.com/v2up-32mb/mcp-tools/internal/pullfile"
+	execx "github.com/v2up-32mb/mcp-tools/internal/tools/execx"
+	fstools "github.com/v2up-32mb/mcp-tools/internal/tools/fs"
+	gittools "github.com/v2up-32mb/mcp-tools/internal/tools/git"
+	golangx "github.com/v2up-32mb/mcp-tools/internal/tools/golangx"
 )
 
 func main() {

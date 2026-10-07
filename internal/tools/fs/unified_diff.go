@@ -13,9 +13,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/example/mcp-tools/internal/config"
-	"github.com/example/mcp-tools/internal/mcp"
-	"github.com/example/mcp-tools/internal/numconv"
+	"github.com/v2up-32mb/mcp-tools/internal/config"
+	"github.com/v2up-32mb/mcp-tools/internal/mcp"
+	"github.com/v2up-32mb/mcp-tools/internal/numconv"
 )
 
 type unifiedFilePatch struct {

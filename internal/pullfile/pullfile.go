@@ -23,9 +23,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/mcp-tools/internal/audit"
-	"github.com/example/mcp-tools/internal/config"
-	"github.com/example/mcp-tools/internal/security"
+	"github.com/v2up-32mb/mcp-tools/internal/audit"
+	"github.com/v2up-32mb/mcp-tools/internal/config"
+	"github.com/v2up-32mb/mcp-tools/internal/security"
 )
 
 var (

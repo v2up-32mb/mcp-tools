@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/mcp-tools/internal/config"
-	"github.com/example/mcp-tools/internal/mcp"
+	"github.com/v2up-32mb/mcp-tools/internal/config"
+	"github.com/v2up-32mb/mcp-tools/internal/mcp"
 )
 
 // crossPlatformAbsUnixStyle 返回跨平台的绝对路径（Windows 带盘符，Unix 用 / 前缀）。
