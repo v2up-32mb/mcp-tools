@@ -430,7 +430,7 @@ func TestListToolsAfterInitialize(t *testing.T) {
 
 func TestInitializeWithCombinedAcceptPrefersJSON(t *testing.T) {
 	handler, _, _ := newTestServer(t)
-	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	rec := httptest.NewRecorder()
@@ -448,7 +448,7 @@ func TestInitializeWithCombinedAcceptPrefersJSON(t *testing.T) {
 
 func TestInitializeAcceptJSONQZeroPrefersSSE(t *testing.T) {
 	handler, _, _ := newTestServer(t)
-	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("Accept", "application/json;q=0, text/event-stream")
 	rec := httptest.NewRecorder()
@@ -483,7 +483,7 @@ func TestInitializeRejectsNonStringProtocolVersion(t *testing.T) {
 
 func TestInitializeRejectsNonObjectClientInfo(t *testing.T) {
 	handler, _, _ := newTestServer(t)
-	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":["tester"]}}`))
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","clientInfo":["tester"]}}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -500,7 +500,7 @@ func TestInitializeRejectsNonObjectClientInfo(t *testing.T) {
 
 func TestInitializeSupportsCompatProtocol(t *testing.T) {
 	handler, _, _ := newTestServer(t)
-	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -522,7 +522,7 @@ func TestInitializeSupportsCompatProtocol(t *testing.T) {
 
 func TestInitializeSetsProtocolHeader(t *testing.T) {
 	handler, _, _ := newTestServer(t)
-	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -2392,7 +2392,7 @@ func TestInitializeIgnoresStaleSessionHeader(t *testing.T) {
 	staleSessionID := initializeSession(t, handler1)
 
 	handler2, _, _ := newTestServer(t)
-	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set(sessionHeader, staleSessionID)
 	rec := httptest.NewRecorder()
@@ -2411,7 +2411,7 @@ func TestInitializeIgnoresStaleSessionHeader(t *testing.T) {
 
 func TestOriginRejectedWhenNotAllowed(t *testing.T) {
 	handler, _, _ := newTestServer(t)
-	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":13,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}`))
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":13,"method":"initialize","params":{"protocolVersion":"2026-07-28"}}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("Origin", "https://evil.example")
 	rec := httptest.NewRecorder()
@@ -2448,7 +2448,7 @@ func TestCORSAllowsProtocolVersionHeader(t *testing.T) {
 
 func initializeSession(t *testing.T, handler http.Handler) string {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)

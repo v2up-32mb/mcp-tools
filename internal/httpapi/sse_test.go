@@ -34,7 +34,7 @@ func parseSSEData(t *testing.T, body string) rpcResponse {
 
 func initializeSessionSSE(t *testing.T, handler http.Handler) string {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("Accept", "text/event-stream")
 	rec := httptest.NewRecorder()
@@ -64,7 +64,7 @@ func initializeSessionSSE(t *testing.T, handler http.Handler) string {
 
 func initializeSessionHTTP(t *testing.T, baseURL string) string {
 	t.Helper()
-	body := bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"tester","version":"1.0.0"}}}`)
+	body := bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","clientInfo":{"name":"tester","version":"1.0.0"}}}`)
 	req, err := http.NewRequest(http.MethodPost, baseURL+"/mcp", body)
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +111,7 @@ func TestSSEInitializeRejectsNonStringProtocolVersion(t *testing.T) {
 
 func TestSSEInitializeRejectsNonObjectClientInfo(t *testing.T) {
 	handler, _, _ := newTestServer(t)
-	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":["tester"]}}`))
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","clientInfo":["tester"]}}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("Accept", "text/event-stream")
 	rec := httptest.NewRecorder()
@@ -335,7 +335,7 @@ func TestSSEInitialize(t *testing.T) {
 
 func TestSSEInitializeCapabilities(t *testing.T) {
 	handler, _, _ := newTestServer(t)
-	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","clientInfo":{"name":"tester","version":"1.0.0"}}}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("Accept", "text/event-stream")
 	rec := httptest.NewRecorder()

@@ -418,9 +418,12 @@ func (s *Server) handleSingleShotSSE(w http.ResponseWriter, r *http.Request, req
 }
 
 func (s *Server) buildStreamResponse(r *http.Request, req rpcRequest, sessionID string) (rpcResponse, bool) {
-	sess, _ := s.lookupSession(sessionID)
+	// Use a pure read (no side-effect cleanup) to avoid triggering stream/sub
+	// teardown from inside a response-building function.
+	sess, _ := s.sessions.Get(sessionID)
 	switch req.Method {
 	case "notifications/initialized":
+		// Short-circuit: notifications do not produce a response body.
 		return rpcResponse{}, true
 	default:
 		if strings.HasPrefix(req.Method, "notifications/") {
@@ -428,8 +431,6 @@ func (s *Server) buildStreamResponse(r *http.Request, req rpcRequest, sessionID 
 		}
 	}
 	switch req.Method {
-	case "notifications/initialized":
-		return rpcResponse{}, true
 	case "tools/list":
 		if sess.ID == "" {
 			return rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32004, Message: "invalid or expired session"}}, true
@@ -542,6 +543,13 @@ func (s *Server) handleSSEStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Re-validate session immediately before registration to close the TOCTOU
+	// window between the initial lookup and stream registration. If the session
+	// was deleted in between, return 410 instead of registering a zombie stream.
+	if _, stillValid := s.sessions.Get(sess.ID); !stillValid {
+		writeJSON(w, http.StatusGone, map[string]any{"error": "session expired"})
+		return
+	}
 	stream := s.streams.register(sess.ID)
 	defer s.streams.unregister(sess.ID, stream)
 	w.Header().Set(protocolHeader, sess.ProtocolVersion)

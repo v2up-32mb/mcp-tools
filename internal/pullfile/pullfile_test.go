@@ -243,12 +243,9 @@ func TestResolveRejectsPathOutsideAllowedRoots(t *testing.T) {
 	path := writePNG(t, outside, "a.png")
 	mgr := NewManager(cfg, nil)
 	_ = root
-	dl, err := mgr.Issue(path, 0, time.Now())
-	if err != nil {
-		// Issue does not enforce allowed roots; only resolve does.
-		t.Fatalf("issue should not enforce roots: %v", err)
-	}
-	if _, err := mgr.Resolve(dl.Token, time.Now().Add(1*time.Second)); !errors.Is(err, ErrInvalidToken) {
-		t.Fatalf("want ErrInvalidToken for outside root, got %v", err)
+	_, err := mgr.Issue(path, 0, time.Now())
+	if err == nil || !strings.Contains(err.Error(), "path outside allowed roots") {
+		// Issue now enforces allowed_roots boundary before signing token (TOCTOU guard).
+		t.Fatalf("want path-outside-roots error, got %v", err)
 	}
 }

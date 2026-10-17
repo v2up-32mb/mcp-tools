@@ -533,7 +533,7 @@ curl -i http://127.0.0.1:8080/mcp \
     "id": 1,
     "method": "initialize",
     "params": {
-      "protocolVersion": "2025-11-25",
+      "protocolVersion": "2026-07-28",
       "clientInfo": {"name": "demo-client", "version": "1.0.0"}
     }
   }'

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,10 +13,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/v2up-32mb/mcp-tools/internal/applog"
 	"github.com/v2up-32mb/mcp-tools/internal/config"
 	"github.com/v2up-32mb/mcp-tools/internal/mcp"
 	"github.com/v2up-32mb/mcp-tools/internal/pullfile"
@@ -79,7 +82,7 @@ func NewServer(cfg config.Config, registry *mcp.Registry, pull ...*pullfile.Mana
 	mux.HandleFunc("/debug/statez", srv.handleStatez)
 	mux.HandleFunc("/file/", srv.handleFileDownload)
 	mux.HandleFunc("/mcp", srv.handleMCP)
-	return withCORS(cfg, mux)
+	return withCORS(cfg, withRecovery(mux))
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -141,6 +144,15 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
+		// Modern-era clients (MCP-Protocol-Version >= 2026-07-28) do not use a
+		// persistent GET stream; they use subscriptions/listen over POST+SSE.
+		// Return 405 so they can detect a modern server and stay modern.
+		if strings.TrimSpace(r.Header.Get(protocolHeader)) != "" {
+			if pv := r.Header.Get(protocolHeader); isModernProtocolVersion(pv, s.cfg.SupportedProtocols) {
+				writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "GET stream not supported in protocol version " + pv + "; use subscriptions/listen"})
+				return
+			}
+		}
 		if !acceptsSSE(r) {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "GET requires Accept: text/event-stream"})
 			return
@@ -152,6 +164,11 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		s.handleSSEStream(w, r)
 		return
 	case http.MethodDelete:
+		// Modern clients do not use DELETE /mcp; ignore session-delete for them.
+		if pv := r.Header.Get(protocolHeader); pv != "" && isModernProtocolVersion(pv, s.cfg.SupportedProtocols) {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "DELETE session not supported in protocol version " + pv})
+			return
+		}
 		s.handleSessionDelete(w, r)
 		return
 	case http.MethodPost:
@@ -202,6 +219,10 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if isModernRequest(req) {
+		s.handleModernDispatch(w, r, req)
+		return
+	}
 	if prefersSingleShotSSE(r) {
 		s.handleMCPSSE(w, r, req)
 		return
@@ -210,6 +231,12 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMCPJSON(w http.ResponseWriter, r *http.Request, req rpcRequest) {
+	// Modern-era requests (carrying _meta protocol version) are dispatched
+	// through the stateless path. Legacy requests use the session-based path.
+	if isModernRequest(req) {
+		s.handleModernDispatch(w, r, req)
+		return
+	}
 	// All notifications (including notifications/initialized) return 202
 	// Accepted with no JSON-RPC body per the MCP spec.
 	if strings.HasPrefix(req.Method, "notifications/") {
@@ -418,9 +445,9 @@ func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set(protocolHeader, sess.ProtocolVersion)
+	s.sessions.Delete(id)
 	s.streams.closeSession(id)
 	s.resSubs.clearSession(id)
-	s.sessions.Delete(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1455,9 +1482,7 @@ func resourceUpdateTargets(resolved string, allowedRoots []string, unsafeAllowAl
 				current = filepath.Dir(current)
 			}
 			if current == "." || current == string(filepath.Separator) {
-				if current == string(filepath.Separator) {
-					targets = append(targets, localFileURI(current))
-				}
+				// Do not notify on filesystem root.
 				break
 			}
 			targets = append(targets, localFileURI(current))
@@ -1574,7 +1599,7 @@ func authorizeRequest(r *http.Request, token string) error {
 	if !strings.HasPrefix(header, "Bearer ") {
 		return errors.New("missing bearer token")
 	}
-	if strings.TrimPrefix(header, "Bearer ") != token {
+	if subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(header, "Bearer ")), []byte(token)) != 1 {
 		return errors.New("invalid bearer token")
 	}
 	return nil
@@ -1690,6 +1715,22 @@ func chooseProtocol(requested string, supported []string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// isModernProtocolVersion reports whether the given version string is a
+// modern-era version (2026-07-28 or later) that is supported by this server.
+// Modern-era clients use per-request _meta instead of initialize handshake.
+func isModernProtocolVersion(version string, supported []string) bool {
+	v := strings.TrimSpace(version)
+	if v == "" {
+		return false
+	}
+	// Check it is actually in our supported list first
+	if _, ok := chooseProtocol(v, supported); !ok {
+		return false
+	}
+	// Versions >= 2026-07-28 are modern-era (lexicographic date comparison works)
+	return v >= config.ProtocolLatest
 }
 
 func nestedString(obj map[string]any, key string) string {
@@ -1846,9 +1887,27 @@ func (s *Server) handleFileDownload(w http.ResponseWriter, r *http.Request) {
 
 func sanitizeHeaderValue(value string) string {
 	value = strings.ReplaceAll(value, `"`, "")
-	value = strings.ReplaceAll(value, "\n", "")
+	value = strings.ReplaceAll(value, "\r", "")
 	value = strings.ReplaceAll(value, "\n", "")
 	return value
+}
+
+// withRecovery wraps a handler with panic recovery. Any unhandled panic is
+// logged with a stack trace and converted into a well-formed JSON-RPC internal
+// error response so MCP clients always receive parseable output.
+func withRecovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				applog.Default().Error("mcp.http", "panic recovered in handler",
+					applog.Field{Key: "panic", Value: fmt.Sprintf("%v", rec)},
+					applog.Field{Key: "stack", Value: string(debug.Stack())},
+				)
+				writeRPCError(w, nil, http.StatusInternalServerError, -32603, "internal server error", nil)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 func withCORS(cfg config.Config, next http.Handler) http.Handler {

@@ -134,10 +134,8 @@ func (m *ProcessManager) Start(cfg config.Config, argv []string, workdir string,
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// 在 m.mu 临界区内完成 ID 分配与注册，确保并发 Start 不产生重复 ID。
-	m.mu.Lock()
 	entry := &ProcessEntry{
-		ID:        m.nextProcessID(),
+		ID:        "",
 		Command:   util.CloneStrings(argv),
 		Workdir:   resolvedWorkdir,
 		StartedAt: time.Now(),
@@ -148,8 +146,6 @@ func (m *ProcessManager) Start(cfg config.Config, argv []string, workdir string,
 		done:      make(chan struct{}),
 	}
 	entry.cancel = cancel
-	m.processes[entry.ID] = entry
-	m.mu.Unlock()
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = resolvedWorkdir
@@ -159,21 +155,23 @@ func (m *ProcessManager) Start(cfg config.Config, argv []string, workdir string,
 	// Unix：放入独立进程组（pgid == pid），Stop/force 才能对整组发信号终止进程树（见 process_unix.go）；
 	// Windows 为 no-op，进程树终止交给 taskkill /T（见 process_windows.go）。
 	configureProcessGroup(cmd)
-	// entry.cmd / entry.Pid 与 Stop、Snapshot 的读取并发，读写均持 entry.mu
 	entry.mu.Lock()
 	entry.cmd = cmd
 	entry.mu.Unlock()
 
 	if err := cmd.Start(); err != nil {
 		cancel()
-		m.mu.Lock()
-		delete(m.processes, entry.ID)
-		m.mu.Unlock()
 		return nil, fmt.Errorf("start process: %w", err)
 	}
 	entry.mu.Lock()
 	entry.Pid = cmd.Process.Pid
 	entry.mu.Unlock()
+
+	// Only register after cmd.Start succeeds, avoiding Pid=-1 visibility window
+	m.mu.Lock()
+	entry.ID = m.nextProcessID()
+	m.processes[entry.ID] = entry
+	m.mu.Unlock()
 
 	go func() {
 		err := cmd.Wait()

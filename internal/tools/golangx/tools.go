@@ -20,7 +20,6 @@ import (
 	"github.com/v2up-32mb/mcp-tools/internal/mcp"
 	"github.com/v2up-32mb/mcp-tools/internal/numconv"
 	"github.com/v2up-32mb/mcp-tools/internal/security"
-	"github.com/v2up-32mb/mcp-tools/internal/util"
 )
 
 type tool struct {
@@ -606,7 +605,7 @@ func intArg(args map[string]any, key string) (int, error) {
 	}
 	switch typed := value.(type) {
 	case float64:
-		parsed, err := util.ParseIntegerFloat(typed, key)
+		parsed, err := numconv.IntFromFloat64(typed, key)
 		if err != nil {
 			return 0, err
 		}

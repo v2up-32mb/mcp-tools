@@ -18,10 +18,10 @@ import (
 )
 
 const (
-	ProtocolLatest = "2025-11-25"
-	ProtocolCompat = "2025-06-18"
-	ProtocolLegacy = "2025-03-26"
-	ProtocolOld    = "2024-11-05"
+	ProtocolLatest = "2026-07-28"
+	ProtocolCompat = "2025-11-25"
+	ProtocolLegacy = "2025-06-18"
+	ProtocolOld    = "2025-03-26"
 )
 
 var knownGitSubcommands = map[string]bool{

@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/v2up-32mb/mcp-tools/internal/applog"
@@ -20,8 +22,30 @@ import (
 	"github.com/v2up-32mb/mcp-tools/internal/numconv"
 	"github.com/v2up-32mb/mcp-tools/internal/pullfile"
 	"github.com/v2up-32mb/mcp-tools/internal/security"
-	"github.com/v2up-32mb/mcp-tools/internal/util"
 )
+
+// regexpCache caches compiled regular expressions to avoid repeated compilation
+// in agent loops. Size-capped at 256 entries to prevent unbounded growth.
+var regexpCache sync.Map
+var regexpCacheSize atomic.Int64
+
+const maxRegexpCacheSize = 256
+
+func getCachedRegexp(pattern string) (*regexp.Regexp, error) {
+	if cached, ok := regexpCache.Load(pattern); ok {
+		return cached.(*regexp.Regexp), nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	if regexpCacheSize.Add(1) <= maxRegexpCacheSize {
+		regexpCache.Store(pattern, re)
+	} else {
+		regexpCacheSize.Add(-1)
+	}
+	return re, nil
+}
 
 type tool struct {
 	name     string
@@ -66,6 +90,16 @@ func readFile(cfg config.Config) func(context.Context, mcp.CallContext, map[stri
 		path, err := resolvePathArg(args, "path", cfg)
 		if err != nil {
 			return mcp.Result{}, err
+		}
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			return mcp.Result{}, mcp.WrapToolError(statErr, mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "stat failed"})
+		}
+		if cfg.OutputMaxBytes > 0 && info.Size() > int64(cfg.OutputMaxBytes) {
+			return mcp.Result{}, mcp.WrapToolError(
+				fmt.Errorf("file size %d bytes exceeds output limit %d; use fs_pull_file for large or binary files", info.Size(), cfg.OutputMaxBytes),
+				mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "file too large"},
+			)
 		}
 		payload, err := os.ReadFile(path)
 		if err != nil {
@@ -255,7 +289,7 @@ func searchText(cfg config.Config) func(context.Context, mcp.CallContext, map[st
 
 		var matcher func(string, string) bool
 		if regexMode {
-			re, compileErr := regexp.Compile(query)
+			re, compileErr := getCachedRegexp(query)
 			if compileErr != nil {
 				return mcp.Result{}, mcp.WrapToolError(fmt.Errorf("invalid regex: %w", compileErr), mcp.AuditData{TargetPath: path, Allowed: true, ResultDigest: "validation failed"})
 			}
@@ -1083,7 +1117,7 @@ func parseInteger(value any, key string) (int, error) {
 	case int:
 		return typed, nil
 	case float64:
-		parsed, err := util.ParseIntegerFloat(typed, key)
+		parsed, err := numconv.IntFromFloat64(typed, key)
 		if err != nil {
 			return 0, err
 		}

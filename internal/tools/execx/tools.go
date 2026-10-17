@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/v2up-32mb/mcp-tools/internal/applog"
 	"github.com/v2up-32mb/mcp-tools/internal/config"
 	"github.com/v2up-32mb/mcp-tools/internal/mcp"
 	"github.com/v2up-32mb/mcp-tools/internal/numconv"
@@ -269,7 +270,7 @@ func applyTimeoutOverride(timeout time.Duration, raw any) (time.Duration, error)
 	case int:
 		seconds = value
 	case float64:
-		parsed, err := util.ParseIntegerFloat(value, "timeout_override_sec")
+		parsed, err := numconv.IntFromFloat64(value, "timeout_override_sec")
 		if err != nil {
 			return 0, err
 		}
@@ -454,6 +455,13 @@ func rawStringArgs(raw any) ([]string, error) {
 	}
 }
 
+var dangerousEnvKeys = map[string]bool{
+	"LD_PRELOAD":           true,
+	"LD_LIBRARY_PATH":      true,
+	"DYLD_INSERT_LIBRARIES": true,
+	"DYLD_LIBRARY_PATH":    true,
+}
+
 func rawEnv(raw any) (map[string]string, error) {
 	if raw == nil {
 		return nil, nil
@@ -464,6 +472,10 @@ func rawEnv(raw any) (map[string]string, error) {
 		for key, value := range values {
 			if err := util.ValidateEnvKey(key); err != nil {
 				return nil, err
+			}
+			if dangerousEnvKeys[key] {
+				applog.Default().Warn("mcp.exec", "dangerous environment variable set",
+					applog.Field{Key: "key", Value: key})
 			}
 			out[key] = value
 		}
@@ -477,6 +489,10 @@ func rawEnv(raw any) (map[string]string, error) {
 			text, ok := value.(string)
 			if !ok {
 				return nil, fmt.Errorf("env values must be strings")
+			}
+			if dangerousEnvKeys[key] {
+				applog.Default().Warn("mcp.exec", "dangerous environment variable set",
+					applog.Field{Key: "key", Value: key})
 			}
 			out[key] = text
 		}

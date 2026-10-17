@@ -306,7 +306,7 @@ func parseLogLimit(raw any) (int, error) {
 	case int:
 		limit = value
 	case float64:
-		parsed, err := util.ParseIntegerFloat(value, "limit")
+		parsed, err := numconv.IntFromFloat64(value, "limit")
 		if err != nil {
 			return 0, err
 		}

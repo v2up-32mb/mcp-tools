@@ -1,8 +1,6 @@
 package util
 
 import (
-	"math"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -304,101 +302,6 @@ func TestValidateEnvKeyWhitespaceWithEqualsReturnsEqualsError(t *testing.T) {
 	}
 	if err.Error() != "key cannot contain '='" {
 		t.Fatalf("error for \" = \" = %q, want \"key cannot contain '=\"", err.Error())
-	}
-}
-
-// --------------------------------------------------------------------------
-// ParseIntegerFloat
-// --------------------------------------------------------------------------
-
-func TestParseIntegerFloatIntegerReturnsInt(t *testing.T) {
-	for _, tc := range []struct {
-		value float64
-		want  int
-	}{
-		{0, 0},
-		{1, 1},
-		{-1, -1},
-		{42, 42},
-		{1e3, 1000},
-	} {
-		got, err := ParseIntegerFloat(tc.value, "value")
-		if err != nil {
-			t.Fatalf("ParseIntegerFloat(%v) unexpected err: %v", tc.value, err)
-		}
-		if got != tc.want {
-			t.Fatalf("ParseIntegerFloat(%v) = %d, want %d", tc.value, got, tc.want)
-		}
-	}
-}
-
-func TestParseIntegerFloatFractionalReturnsError(t *testing.T) {
-	_, err := ParseIntegerFloat(1.25, "myfield")
-	if err == nil {
-		t.Fatal("ParseIntegerFloat(1.25) = nil, want error")
-	}
-	if err.Error() != "myfield must be an integer" {
-		t.Fatalf("error = %q, want %q", err.Error(), "myfield must be an integer")
-	}
-}
-
-func TestParseIntegerFloatNaNReturnsError(t *testing.T) {
-	_, err := ParseIntegerFloat(math.NaN(), "value")
-	if err == nil {
-		t.Fatal("ParseIntegerFloat(NaN) = nil, want error")
-	}
-	if !strings.Contains(err.Error(), "must be an integer") {
-		t.Fatalf("error = %q, want it to contain 'must be an integer'", err.Error())
-	}
-}
-
-func TestParseIntegerFloatInfReturnsError(t *testing.T) {
-	for _, v := range []float64{math.Inf(1), math.Inf(-1)} {
-		_, err := ParseIntegerFloat(v, "value")
-		if err == nil {
-			t.Fatalf("ParseIntegerFloat(%v) = nil, want error", v)
-		}
-	}
-}
-
-func TestParseIntegerFloatOutOfRangeReturnsError(t *testing.T) {
-	if strconv.IntSize != 64 {
-		t.Skip("out-of-range checks assume 64-bit int")
-	}
-
-	// The implementation's range is the half-open interval [-2^63, 2^63):
-	// maxExclusive = float64(1<<63) = 2^63 exactly. 2^63 is exactly
-	// representable in float64, so it is the smallest float64 at the upper
-	// boundary and must be rejected as out of range.
-	maxExclusive := math.Ldexp(1, 63)
-	if _, err := ParseIntegerFloat(maxExclusive, "n"); err == nil {
-		t.Fatal("expected 2^63 to be rejected as out of range")
-	} else if err.Error() != "n is out of range" {
-		t.Fatalf("error = %q, want %q", err.Error(), "n is out of range")
-	}
-
-	// The lower bound is inclusive: -2^63 is exactly representable in float64
-	// and must be accepted and round-trip exactly.
-	minInclusive := -math.Ldexp(1, 63)
-	got, err := ParseIntegerFloat(minInclusive, "n")
-	if err != nil {
-		t.Fatalf("ParseIntegerFloat(-2^63) unexpected err: %v", err)
-	}
-	if int64(got) != int64(minInclusive) {
-		t.Fatalf("min edge got %d, want %d", got, int64(minInclusive))
-	}
-
-	// A large odd integer that is exactly representable in float64 (2^53 - 1,
-	// the largest odd float64 < 2^53) round-trips without precision loss and
-	// is well inside the platform int range, so it must be accepted. Using an
-	// odd value proves there is no float64 rounding inside the parser.
-	preciseOdd := math.Ldexp(1, 53) - 1
-	got, err = ParseIntegerFloat(preciseOdd, "n")
-	if err != nil {
-		t.Fatalf("ParseIntegerFloat(2^53-1) unexpected err: %v", err)
-	}
-	if int64(got) != int64(preciseOdd) {
-		t.Fatalf("2^53-1 round-trip got %d, want %d", got, int64(preciseOdd))
 	}
 }
 

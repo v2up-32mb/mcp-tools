@@ -38,8 +38,8 @@ session_ttl_min: 15
 server_name: yaml-server
 server_version: 1.2.3
 supported_protocols:
+  - 2026-07-28
   - 2025-11-25
-  - 2025-03-26
 git:
   allowed_subcommands:
     - status
@@ -646,7 +646,7 @@ func TestLoadRejectsExplicitEmptySupportedProtocols(t *testing.T) {
 func TestLoadRejectsMixedEmptySupportedProtocols(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "bad-mixed-protocols.yaml")
-	content := "bearer_token: t\nsupported_protocols: [\"2025-11-25\", \"\"]\n"
+	content := "bearer_token: t\nsupported_protocols: [\"2026-07-28\", \"\"]\n"
 	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}

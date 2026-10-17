@@ -3,8 +3,6 @@ package util
 import (
 	"errors"
 	"strings"
-
-	"github.com/v2up-32mb/mcp-tools/internal/numconv"
 )
 
 // CloneStrings returns a copy of values, or nil if values is nil.
@@ -46,7 +44,3 @@ func ValidateEnvKey(key string) error {
 	return nil
 }
 
-// ParseIntegerFloat converts a JSON-style float64 to int safely.
-func ParseIntegerFloat(value float64, name string) (int, error) {
-	return numconv.IntFromFloat64(value, name)
-}

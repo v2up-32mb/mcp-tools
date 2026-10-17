@@ -98,6 +98,12 @@ func (m *Manager) Issue(path string, maxBytes int64, now time.Time) (Download, e
 	if !m.cfg.PullFile.Enabled {
 		return Download{}, ErrDisabled
 	}
+	// Validate allowed_roots boundary before signing the token (TOCTOU guard)
+	if !m.cfg.UnsafeAllowAll {
+		if _, err := security.ResolvePath(path, m.cfg.AllowedRoots); err != nil {
+			return Download{}, fmt.Errorf("path outside allowed roots: %w", err)
+		}
+	}
 	limit := m.cfg.PullFile.MaxBytes
 	if maxBytes > 0 && maxBytes < limit {
 		limit = maxBytes

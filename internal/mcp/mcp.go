@@ -242,7 +242,7 @@ func extractToolError(err error) *ToolError {
 	if errors.As(err, &toolErr) {
 		return toolErr
 	}
-	return &ToolError{Err: err, Audit: AuditData{Allowed: true, ResultDigest: "tool error"}}
+	return &ToolError{Err: err, Audit: AuditData{Allowed: false, ResultDigest: "tool error"}}
 }
 
 func ensureSchema(schema map[string]any) map[string]any {

@@ -13,9 +13,8 @@ func TestManagerPruneExpiredReturnsRemovedSessionIDs(t *testing.T) {
 	}
 
 	manager.mu.Lock()
-	expired := manager.sessions[sess.ID]
-	expired.LastSeen = time.Now().Add(-2 * time.Minute)
-	manager.sessions[sess.ID] = expired
+	entry := manager.sessions[sess.ID]
+	entry.lastSeenUnix.Store(time.Now().Add(-2 * time.Minute).Unix())
 	manager.mu.Unlock()
 
 	removed := manager.PruneExpired()
