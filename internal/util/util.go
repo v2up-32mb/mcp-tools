@@ -43,4 +43,3 @@ func ValidateEnvKey(key string) error {
 	}
 	return nil
 }
-

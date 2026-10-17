@@ -456,10 +456,10 @@ func rawStringArgs(raw any) ([]string, error) {
 }
 
 var dangerousEnvKeys = map[string]bool{
-	"LD_PRELOAD":           true,
-	"LD_LIBRARY_PATH":      true,
+	"LD_PRELOAD":            true,
+	"LD_LIBRARY_PATH":       true,
 	"DYLD_INSERT_LIBRARIES": true,
-	"DYLD_LIBRARY_PATH":    true,
+	"DYLD_LIBRARY_PATH":     true,
 }
 
 func rawEnv(raw any) (map[string]string, error) {

@@ -27,7 +27,7 @@ const metaKeySubscriptionId = "io.modelcontextprotocol/subscriptionId"
 // Modern error codes defined by the 2026-07-28 specification.
 const (
 	errCodeUnsupportedProtocolVersion = -32022
-	errCodeHeaderMismatch              = -32020
+	errCodeHeaderMismatch             = -32020
 )
 
 // isModernRequest returns true when the request carries per-request
@@ -82,15 +82,15 @@ func writeModernResult(w http.ResponseWriter, id any, result any) {
 		}
 	} else {
 		// For struct results (e.g. mcp.Result), marshal to map to inject resultType.
-			b, err := json.Marshal(result)
-			if err == nil {
-				var m map[string]any
-				if json.Unmarshal(b, &m) == nil {
-					if _, exists := m["resultType"]; !exists {
-						m["resultType"] = "complete"
-						result = m
-					}
+		b, err := json.Marshal(result)
+		if err == nil {
+			var m map[string]any
+			if json.Unmarshal(b, &m) == nil {
+				if _, exists := m["resultType"]; !exists {
+					m["resultType"] = "complete"
+					result = m
 				}
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, rpcResponse{JSONRPC: "2.0", ID: id, Result: result})
@@ -177,7 +177,7 @@ func (s *Server) handleModernDispatch(w http.ResponseWriter, r *http.Request, re
 // handleServerDiscover implements the server/discover method (MUST per spec).
 func (s *Server) handleServerDiscover(w http.ResponseWriter, r *http.Request, req rpcRequest) {
 	result := map[string]any{
-		"resultType":       "complete",
+		"resultType":        "complete",
 		"supportedVersions": s.cfg.SupportedProtocols,
 		"capabilities": map[string]any{
 			"tools": map[string]any{

@@ -25,8 +25,8 @@ func modernRequest(method string, id any, params map[string]any) []byte {
 		params = map[string]any{}
 	}
 	params["_meta"] = map[string]any{
-		"io.modelcontextprotocol/protocolVersion": config.ProtocolLatest,
-		"io.modelcontextprotocol/clientInfo":       map[string]any{"name": "modern-test", "version": "1.0.0"},
+		"io.modelcontextprotocol/protocolVersion":    config.ProtocolLatest,
+		"io.modelcontextprotocol/clientInfo":         map[string]any{"name": "modern-test", "version": "1.0.0"},
 		"io.modelcontextprotocol/clientCapabilities": map[string]any{},
 	}
 	body := map[string]any{
@@ -162,7 +162,7 @@ func TestModernUnsupportedProtocolVersionReturns32022(t *testing.T) {
 	handler, _, _ := newTestServer(t)
 	params := map[string]any{
 		"_meta": map[string]any{
-			"io.modelcontextprotocol/protocolVersion":   "1900-01-01",
+			"io.modelcontextprotocol/protocolVersion":    "1900-01-01",
 			"io.modelcontextprotocol/clientCapabilities": map[string]any{},
 		},
 	}
@@ -431,7 +431,7 @@ func TestModernNotificationReturns202(t *testing.T) {
 		"method":  "notifications/initialized",
 		"params": map[string]any{
 			"_meta": map[string]any{
-				"io.modelcontextprotocol/protocolVersion":   config.ProtocolLatest,
+				"io.modelcontextprotocol/protocolVersion":    config.ProtocolLatest,
 				"io.modelcontextprotocol/clientCapabilities": map[string]any{},
 			},
 		},
