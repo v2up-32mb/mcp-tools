@@ -113,14 +113,10 @@ session_ttl_min: 120
 
 # 服务元信息
 server_name: mcp-tools
-server_version: 1.0.0
 
-# 协议版本白名单。通常不需要改。
-supported_protocols:
-  - 2026-07-28
-  - 2025-11-25
-  - 2025-06-18
-  - 2025-03-26
+# 注：server_version 和 supported_protocols 已从配置文件中移除。
+# - server_version 现在由构建时通过 -ldflags 注入（CI 自动使用 git tag）。
+# - supported_protocols 由程序内部维护，跟随代码更新，无需手动配置。
 
 git:
   # Git 只开放固定白名单子命令，不支持任意透传，也不支持 push。

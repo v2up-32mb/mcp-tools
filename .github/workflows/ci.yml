@@ -67,11 +67,13 @@ jobs:
           cache: true
       - name: 构建 ${{ matrix.goos }}/${{ matrix.goarch }}
         run: |
+          VERSION="${GITHUB_REF_NAME:-dev}"
           CGO_ENABLED=0 \
           GOOS=${{ matrix.goos }} \
           GOARCH=${{ matrix.goarch }} \
           GOAMD64=${{ matrix.goamd64 }} \
-          go build -trimpath -ldflags "-s -w" \
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/v2up-32mb/mcp-tools/internal/version.Version=${VERSION}" \
             -o dist/${{ matrix.artifact }} ./cmd/mcp-tools
       - name: 校验产物
         run: file dist/*

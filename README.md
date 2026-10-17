@@ -321,8 +321,6 @@ allowed_origins:
 - `idle_timeout_sec`
 - `session_ttl_min`
 - `server_name`
-- `server_version`
-- `supported_protocols`
 - `git.allowed_subcommands`
 - `exec.presets`
 - `exec.command_templates`
@@ -348,7 +346,6 @@ allowed_origins:
   - 轮转文件名形如 `mcp-audit.jsonl.1`、`mcp-audit.jsonl.2`
 - 审计日志中的工具参数是摘要化记录：大文本/补丁只记录大小、行数和 sha256，`env` 只记录 key，不记录完整值
 - `allowed_origins` 是浏览器 `Origin` 白名单；**不是 hostname 入站控制**；列表项不能为空或纯空白
-- `supported_protocols` 若显式配置，不能为空列表；`[]` 会被拒绝
 - `git.allowed_subcommands` 可显式配置为 `[]` 来禁用全部 Git 子命令，列表项本身不能为空，且只支持当前实现已有的白名单子命令，**不支持 `push`**
 - `command_timeout_sec` 是 exec 默认超时；未显式设置 `timeout_sec` 的 preset/template 会继承它
 - `exec.presets.<name>.enabled: false` 可禁用内置 preset
@@ -428,7 +425,6 @@ go run ./cmd/mcp-tools
 - `MCP_IDLE_TIMEOUT_SEC`：默认 `60`
 - `MCP_SESSION_TTL_MIN`：默认 `120`
 - `MCP_SERVER_NAME`：默认 `mcp-tools`
-- `MCP_SERVER_VERSION`：默认 `1.0.0`
 
 ## 传输层说明
 

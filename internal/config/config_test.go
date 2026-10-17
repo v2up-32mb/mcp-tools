@@ -36,10 +36,6 @@ write_timeout_sec: 26
 idle_timeout_sec: 36
 session_ttl_min: 15
 server_name: yaml-server
-server_version: 1.2.3
-supported_protocols:
-  - 2026-07-28
-  - 2025-11-25
 git:
   allowed_subcommands:
     - status
@@ -617,42 +613,45 @@ func TestLoadYAMLCommandTimeoutUpdatesDefaultExecTimeouts(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsEmptySupportedProtocols(t *testing.T) {
+func TestLoadRejectsSupportedProtocolsAsUnknownField(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "bad-protocols.yaml")
-	content := "bearer_token: t\nsupported_protocols: [\"\"]\n"
+	content := "bearer_token: t\nsupported_protocols: [\"2026-07-28\"]\n"
 	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
 	if err == nil {
-		t.Fatal("expected empty supported_protocols to fail")
+		t.Fatal("expected supported_protocols to be rejected as unknown field")
+	}
+	if !strings.Contains(err.Error(), "supported_protocols") {
+		t.Fatalf("expected error to mention supported_protocols, got %v", err)
 	}
 }
 
-func TestLoadRejectsExplicitEmptySupportedProtocols(t *testing.T) {
+func TestLoadRejectsServerVersionAsUnknownField(t *testing.T) {
 	root := t.TempDir()
-	configPath := filepath.Join(root, "bad-empty-protocols.yaml")
-	content := "bearer_token: t\nsupported_protocols: []\n"
+	configPath := filepath.Join(root, "bad-version.yaml")
+	content := "bearer_token: t\nserver_version: 1.0.0\n"
 	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
 	if err == nil {
-		t.Fatal("expected explicit empty supported_protocols to fail")
+		t.Fatal("expected server_version to be rejected as unknown field")
+	}
+	if !strings.Contains(err.Error(), "server_version") {
+		t.Fatalf("expected error to mention server_version, got %v", err)
 	}
 }
 
-func TestLoadRejectsMixedEmptySupportedProtocols(t *testing.T) {
-	root := t.TempDir()
-	configPath := filepath.Join(root, "bad-mixed-protocols.yaml")
-	content := "bearer_token: t\nsupported_protocols: [\"2026-07-28\", \"\"]\n"
-	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
+func TestSupportedProtocolsReturnsExpectedVersions(t *testing.T) {
+	protocols := SupportedProtocols()
+	if len(protocols) < 2 {
+		t.Fatalf("expected at least 2 supported protocols, got %d", len(protocols))
 	}
-	_, err := LoadWithOptions(LoadOptions{ConfigPath: configPath, WorkDir: root})
-	if err == nil {
-		t.Fatal("expected mixed empty supported_protocols to fail")
+	if protocols[0] != ProtocolLatest {
+		t.Fatalf("expected first protocol to be ProtocolLatest (%s), got %s", ProtocolLatest, protocols[0])
 	}
 }
 

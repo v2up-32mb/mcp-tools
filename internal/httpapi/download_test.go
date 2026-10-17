@@ -48,8 +48,6 @@ func newPullTestServer(t *testing.T, mutate func(*config.Config)) (http.Handler,
 		StartupDirectory:      dir,
 		SessionTTL:            time.Hour,
 		ServerName:            "mcp-tools-test",
-		ServerVersion:         "test",
-		SupportedProtocols:    []string{config.ProtocolLatest, config.ProtocolCompat, config.ProtocolLegacy},
 		PullFile: config.PullFileConfig{
 			Enabled:    true,
 			MaxBytes:   1 << 20,

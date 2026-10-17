@@ -24,6 +24,14 @@ const (
 	ProtocolOld    = "2025-03-26"
 )
 
+// SupportedProtocols returns the ordered list of MCP protocol versions this
+// build supports, newest first. This is not configurable: the set always
+// matches the code, so it stays correct across upgrades without any manual
+// config-file edits.
+func SupportedProtocols() []string {
+	return []string{ProtocolLatest, ProtocolCompat, ProtocolLegacy, ProtocolOld}
+}
+
 var knownGitSubcommands = map[string]bool{
 	"status":  true,
 	"diff":    true,
@@ -60,8 +68,6 @@ type Config struct {
 	StartupDirectory      string
 	SessionTTL            time.Duration
 	ServerName            string
-	ServerVersion         string
-	SupportedProtocols    []string
 	PullFile              PullFileConfig
 }
 
@@ -119,8 +125,6 @@ type fileConfig struct {
 	IdleTimeoutSec        *int                `yaml:"idle_timeout_sec"`
 	SessionTTLMin         *int                `yaml:"session_ttl_min"`
 	ServerName            string              `yaml:"server_name"`
-	ServerVersion         string              `yaml:"server_version"`
-	SupportedProtocols    *[]string           `yaml:"supported_protocols"`
 	Git                   fileGitConfig       `yaml:"git"`
 	Exec                  fileExecConfig      `yaml:"exec"`
 	PullFile              *filePullFileConfig `yaml:"pull_file"`
@@ -214,7 +218,6 @@ func LoadWithOptions(opts LoadOptions) (Config, error) {
 	}
 	cfg.AllowedRoots = mergeUniquePaths(nil, cfg.AllowedRoots)
 	cfg.AllowedOrigins = dedupeStrings(cfg.AllowedOrigins)
-	cfg.SupportedProtocols = dedupeStrings(cfg.SupportedProtocols)
 	return cfg, nil
 }
 
@@ -242,8 +245,6 @@ func defaultConfig(cwd string) Config {
 		StartupDirectory:      cwd,
 		SessionTTL:            120 * time.Minute,
 		ServerName:            "mcp-tools",
-		ServerVersion:         "1.0.0",
-		SupportedProtocols:    []string{ProtocolLatest, ProtocolCompat, ProtocolLegacy, ProtocolOld},
 		PullFile: PullFileConfig{
 			Enabled:    true,
 			MaxBytes:   10 * 1024 * 1024,
@@ -365,12 +366,6 @@ func applyYAMLFile(cfg *Config, path string) error {
 	}
 	if fc.ServerName != "" {
 		cfg.ServerName = fc.ServerName
-	}
-	if fc.ServerVersion != "" {
-		cfg.ServerVersion = fc.ServerVersion
-	}
-	if fc.SupportedProtocols != nil {
-		cfg.SupportedProtocols = util.CloneStrings(*fc.SupportedProtocols)
 	}
 	if fc.Git.AllowedSubcommands != nil {
 		allowed, err := resolveGitAllowedSubcommands(*fc.Git.AllowedSubcommands)
@@ -592,9 +587,6 @@ func applyEnv(cfg *Config, cwd string) error {
 	}
 	if value := os.Getenv("MCP_SERVER_NAME"); value != "" {
 		cfg.ServerName = value
-	}
-	if value := os.Getenv("MCP_SERVER_VERSION"); value != "" {
-		cfg.ServerVersion = value
 	}
 	if value := os.Getenv("MCP_READ_HEADER_TIMEOUT_SEC"); value != "" {
 		parsed, err := parsePositiveInt(value, "MCP_READ_HEADER_TIMEOUT_SEC")
@@ -938,17 +930,11 @@ func validateConfig(cfg Config) error {
 		return errors.New("at least one allowed root required")
 	}
 	cfg.AllowedRoots = mergeUniquePaths(nil, cfg.AllowedRoots)
-	for _, origin := range cfg.AllowedOrigins {
-		if strings.TrimSpace(origin) == "" {
-			return errors.New("allowed_origins cannot contain empty entries")
-		}
-	}
-	if len(cfg.SupportedProtocols) == 0 {
-		return errors.New("at least one supported protocol required")
-	}
-	for _, protocol := range cfg.SupportedProtocols {
-		if strings.TrimSpace(protocol) == "" {
-			return errors.New("supported_protocols cannot contain empty values")
+	if len(cfg.AllowedOrigins) > 0 {
+		for _, origin := range cfg.AllowedOrigins {
+			if strings.TrimSpace(origin) == "" {
+				return errors.New("allowed_origins cannot contain empty entries")
+			}
 		}
 	}
 	// Git subcommand validation is done in resolveGitAllowedSubcommands

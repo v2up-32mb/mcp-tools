@@ -24,6 +24,7 @@ import (
 	"github.com/v2up-32mb/mcp-tools/internal/pullfile"
 	"github.com/v2up-32mb/mcp-tools/internal/security"
 	"github.com/v2up-32mb/mcp-tools/internal/session"
+	"github.com/v2up-32mb/mcp-tools/internal/version"
 )
 
 const sessionHeader = "Mcp-Session-Id"
@@ -86,7 +87,7 @@ func NewServer(cfg config.Config, registry *mcp.Registry, pull ...*pullfile.Mana
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "name": s.cfg.ServerName, "version": s.cfg.ServerVersion})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "name": s.cfg.ServerName, "version": version.Version})
 }
 
 func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
@@ -94,7 +95,7 @@ func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "not-ready"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "name": s.cfg.ServerName, "version": s.cfg.ServerVersion})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "name": s.cfg.ServerName, "version": version.Version})
 }
 
 func (s *Server) handleStatez(w http.ResponseWriter, r *http.Request) {
@@ -148,7 +149,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		// persistent GET stream; they use subscriptions/listen over POST+SSE.
 		// Return 405 so they can detect a modern server and stay modern.
 		if strings.TrimSpace(r.Header.Get(protocolHeader)) != "" {
-			if pv := r.Header.Get(protocolHeader); isModernProtocolVersion(pv, s.cfg.SupportedProtocols) {
+			if pv := r.Header.Get(protocolHeader); isModernProtocolVersion(pv, config.SupportedProtocols()) {
 				writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "GET stream not supported in protocol version " + pv + "; use subscriptions/listen"})
 				return
 			}
@@ -165,7 +166,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	case http.MethodDelete:
 		// Modern clients do not use DELETE /mcp; ignore session-delete for them.
-		if pv := r.Header.Get(protocolHeader); pv != "" && isModernProtocolVersion(pv, s.cfg.SupportedProtocols) {
+		if pv := r.Header.Get(protocolHeader); pv != "" && isModernProtocolVersion(pv, config.SupportedProtocols()) {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "DELETE session not supported in protocol version " + pv})
 			return
 		}
@@ -283,10 +284,10 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, req rp
 		rejectInvalidInitializeParams(err.Error())
 		return
 	}
-	protocol, ok := chooseProtocol(requested, s.cfg.SupportedProtocols)
+	protocol, ok := chooseProtocol(requested, config.SupportedProtocols())
 	if !ok {
-		s.debugLogRejected(r, &req, http.StatusBadRequest, -32002, "unsupported protocol version", map[string]any{"supported_protocols": s.cfg.SupportedProtocols})
-		writeRPCError(w, req.ID, http.StatusBadRequest, -32002, "unsupported protocol version", map[string]any{"supported": s.cfg.SupportedProtocols})
+		s.debugLogRejected(r, &req, http.StatusBadRequest, -32002, "unsupported protocol version", map[string]any{"supported_protocols": config.SupportedProtocols()})
+		writeRPCError(w, req.ID, http.StatusBadRequest, -32002, "unsupported protocol version", map[string]any{"supported": config.SupportedProtocols()})
 		return
 	}
 	clientInfo, err := optionalObjectParamWithName(req.Params, "clientInfo", "clientInfo")
@@ -549,7 +550,7 @@ func (s *Server) initializeResult(protocol string) map[string]any {
 		"protocolVersion": protocol,
 		"serverInfo": map[string]any{
 			"name":    s.cfg.ServerName,
-			"version": s.cfg.ServerVersion,
+			"version": version.Version,
 		},
 		"capabilities": map[string]any{
 			"tools": map[string]any{
@@ -1277,9 +1278,9 @@ func (s *Server) validateProtocolRequest(w http.ResponseWriter, r *http.Request,
 	headerVersion := strings.TrimSpace(r.Header.Get(protocolHeader))
 	if req.Method == "initialize" {
 		if headerVersion != "" {
-			if _, ok := chooseProtocol(headerVersion, s.cfg.SupportedProtocols); !ok {
-				s.debugLogRejected(r, &req, http.StatusBadRequest, -32002, "unsupported protocol version", map[string]any{"supported_protocols": s.cfg.SupportedProtocols})
-				writeRPCError(w, req.ID, http.StatusBadRequest, -32002, "unsupported protocol version", map[string]any{"supported": s.cfg.SupportedProtocols})
+			if _, ok := chooseProtocol(headerVersion, config.SupportedProtocols()); !ok {
+				s.debugLogRejected(r, &req, http.StatusBadRequest, -32002, "unsupported protocol version", map[string]any{"supported_protocols": config.SupportedProtocols()})
+				writeRPCError(w, req.ID, http.StatusBadRequest, -32002, "unsupported protocol version", map[string]any{"supported": config.SupportedProtocols()})
 				return errors.New("unsupported protocol version")
 			}
 		}
@@ -1368,8 +1369,8 @@ func (s *Server) stateSnapshot() map[string]any {
 	return map[string]any{
 		"server": map[string]any{
 			"name":                s.cfg.ServerName,
-			"version":             s.cfg.ServerVersion,
-			"supported_protocols": s.cfg.SupportedProtocols,
+			"version":             version.Version,
+			"supported_protocols": config.SupportedProtocols(),
 		},
 		"config": map[string]any{
 			"listen_addr":              s.cfg.ListenAddr,

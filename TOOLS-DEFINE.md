@@ -22,7 +22,7 @@
 2. 所有工具调用都会写审计日志
 3. 所有路径/仓库/workdir 都必须落在允许目录内
 4. 工具错误统一包装成 MCP tool error，而不是任意 panic / 原始错误泄露
-5. YAML 配置加载允许空文件/仅注释文件表示“不做 YAML 覆盖”；非空配置只接受单个文档，并启用未知字段拒绝，显式 `null` / `~` 文档以及字段值/列表项中的显式空值都会被拒绝，避免安全关键配置拼写错误、额外文档或空占位被静默忽略；`allowed_roots` / `MCP_ALLOWED_ROOTS` 与 `allowed_origins` / `MCP_ALLOWED_ORIGINS` 条目不能为空；`supported_protocols` 显式空列表会被拒绝；`git.allowed_subcommands` 可显式为空以禁用全部 Git 子命令，但列表项本身不能是空字符串
+5. YAML 配置加载允许空文件/仅注释文件表示“不做 YAML 覆盖”；非空配置只接受单个文档，并启用未知字段拒绝，显式 `null` / `~` 文档以及字段值/列表项中的显式空值都会被拒绝，避免安全关键配置拼写错误、额外文档或空占位被静默忽略；`allowed_roots` / `MCP_ALLOWED_ROOTS` 与 `allowed_origins` / `MCP_ALLOWED_ORIGINS` 条目不能为空；`server_version` 和 `supported_protocols` 已从配置文件中移除——版本号由构建时 ldflags 注入，支持的协议版本由程序内部维护；`git.allowed_subcommands` 可显式为空以禁用全部 Git 子命令，但列表项本身不能是空字符串
 
 当前 `yolo` 分支新增：
 

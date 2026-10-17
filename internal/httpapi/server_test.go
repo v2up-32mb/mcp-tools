@@ -53,8 +53,6 @@ func newTestServerWithConfig(t *testing.T, mutate func(*config.Config)) (http.Ha
 		StartupDirectory:      dir,
 		SessionTTL:            time.Hour,
 		ServerName:            "mcp-tools-test",
-		ServerVersion:         "test",
-		SupportedProtocols:    []string{config.ProtocolLatest, config.ProtocolCompat, config.ProtocolLegacy},
 	}
 	if mutate != nil {
 		mutate(&cfg)
@@ -125,18 +123,16 @@ func TestSSEAsyncQueueFullFallbackDoesNotExecuteToolTwice(t *testing.T) {
 	dir := t.TempDir()
 	auditPath := filepath.Join(dir, "audit.jsonl")
 	cfg := config.Config{
-		BearerToken:        "secret",
-		AllowedRoots:       []string{dir},
-		AuditLogPath:       auditPath,
-		CommandTimeout:     5 * time.Second,
-		OutputMaxBytes:     4096,
-		StreamQueueSize:    1,
-		MaxRequestBytes:    1 << 20,
-		StartupDirectory:   dir,
-		SessionTTL:         time.Hour,
-		ServerName:         "mcp-tools-test",
-		ServerVersion:      "test",
-		SupportedProtocols: []string{config.ProtocolLatest, config.ProtocolCompat, config.ProtocolLegacy},
+		BearerToken:      "secret",
+		AllowedRoots:     []string{dir},
+		AuditLogPath:     auditPath,
+		CommandTimeout:   5 * time.Second,
+		OutputMaxBytes:   4096,
+		StreamQueueSize:  1,
+		MaxRequestBytes:  1 << 20,
+		StartupDirectory: dir,
+		SessionTTL:       time.Hour,
+		ServerName:       "mcp-tools-test",
 	}
 	logger, err := audit.NewJSONLWriter(auditPath)
 	if err != nil {
@@ -374,8 +370,7 @@ func TestStatezPrunesExpiredResourceSubscriptions(t *testing.T) {
 	}
 	srv := &Server{
 		cfg: config.Config{
-			SessionTTL:         time.Millisecond,
-			SupportedProtocols: []string{config.ProtocolLatest},
+			SessionTTL: time.Millisecond,
 		},
 		sessions: manager,
 		streams:  newStreamHub(1),

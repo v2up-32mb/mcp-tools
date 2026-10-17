@@ -22,6 +22,7 @@ import (
 	fstools "github.com/v2up-32mb/mcp-tools/internal/tools/fs"
 	gittools "github.com/v2up-32mb/mcp-tools/internal/tools/git"
 	golangx "github.com/v2up-32mb/mcp-tools/internal/tools/golangx"
+	"github.com/v2up-32mb/mcp-tools/internal/version"
 )
 
 func main() {
@@ -130,8 +131,8 @@ func printConfigSummary(cfg config.Config) error {
 		"idle_timeout":                        int(cfg.IdleTimeout / time.Second),
 		"session_ttl_min":                     int(cfg.SessionTTL / time.Minute),
 		"server_name":                         cfg.ServerName,
-		"server_version":                      cfg.ServerVersion,
-		"supported_protocols":                 cfg.SupportedProtocols,
+		"server_version":                      version.Version,
+		"supported_protocols":                 config.SupportedProtocols(),
 		"git_allowed":                         sortedTrueKeys(cfg.GitAllowed),
 		"exec_presets":                        sortedPresetNames(cfg.ExecPresets),
 		"command_templates":                   sortedTemplateNames(cfg.CommandTemplates),

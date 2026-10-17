@@ -39,18 +39,16 @@ func TestToolsCallRejectsNonObjectArgumentsBeforeExecutingTool(t *testing.T) {
 	auditPath := filepath.Join(dir, "audit.jsonl")
 	marker := filepath.Join(dir, "marker.txt")
 	cfg := config.Config{
-		BearerToken:        "secret",
-		AllowedRoots:       []string{dir},
-		AuditLogPath:       auditPath,
-		OutputMaxBytes:     4096,
-		StreamQueueSize:    128,
-		MaxRequestBytes:    1 << 20,
-		CommandTimeout:     5 * time.Second,
-		StartupDirectory:   dir,
-		SessionTTL:         time.Hour,
-		ServerName:         "mcp-tools-test",
-		ServerVersion:      "test",
-		SupportedProtocols: []string{config.ProtocolLatest, config.ProtocolCompat, config.ProtocolLegacy},
+		BearerToken:      "secret",
+		AllowedRoots:     []string{dir},
+		AuditLogPath:     auditPath,
+		OutputMaxBytes:   4096,
+		StreamQueueSize:  128,
+		MaxRequestBytes:  1 << 20,
+		CommandTimeout:   5 * time.Second,
+		StartupDirectory: dir,
+		SessionTTL:       time.Hour,
+		ServerName:       "mcp-tools-test",
 	}
 	logger, err := audit.NewJSONLWriter(auditPath)
 	if err != nil {
@@ -112,18 +110,16 @@ func TestToolsCallRejectsNonStringName(t *testing.T) {
 	auditPath := filepath.Join(dir, "audit.jsonl")
 	marker := filepath.Join(dir, "marker.txt")
 	cfg := config.Config{
-		BearerToken:        "secret",
-		AllowedRoots:       []string{dir},
-		AuditLogPath:       auditPath,
-		OutputMaxBytes:     4096,
-		StreamQueueSize:    128,
-		MaxRequestBytes:    1 << 20,
-		CommandTimeout:     5 * time.Second,
-		StartupDirectory:   dir,
-		SessionTTL:         time.Hour,
-		ServerName:         "mcp-tools-test",
-		ServerVersion:      "test",
-		SupportedProtocols: []string{config.ProtocolLatest, config.ProtocolCompat, config.ProtocolLegacy},
+		BearerToken:      "secret",
+		AllowedRoots:     []string{dir},
+		AuditLogPath:     auditPath,
+		OutputMaxBytes:   4096,
+		StreamQueueSize:  128,
+		MaxRequestBytes:  1 << 20,
+		CommandTimeout:   5 * time.Second,
+		StartupDirectory: dir,
+		SessionTTL:       time.Hour,
+		ServerName:       "mcp-tools-test",
 	}
 	logger, err := audit.NewJSONLWriter(auditPath)
 	if err != nil {

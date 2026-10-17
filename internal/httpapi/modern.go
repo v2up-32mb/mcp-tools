@@ -14,7 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/v2up-32mb/mcp-tools/internal/config"
 	"github.com/v2up-32mb/mcp-tools/internal/mcp"
+	"github.com/v2up-32mb/mcp-tools/internal/version"
 )
 
 // metaKeyProtocolVersion is the _meta key for per-request protocol version.
@@ -108,7 +110,7 @@ func (s *Server) writeUnsupportedProtocolVersion(w http.ResponseWriter, id any, 
 	writeModernError(w, id, http.StatusBadRequest, errCodeUnsupportedProtocolVersion,
 		"Unsupported protocol version",
 		map[string]any{
-			"supported": s.cfg.SupportedProtocols,
+			"supported": config.SupportedProtocols(),
 			"requested": requested,
 		})
 }
@@ -118,7 +120,7 @@ func (s *Server) writeUnsupportedProtocolVersion(w http.ResponseWriter, id any, 
 func (s *Server) handleModernDispatch(w http.ResponseWriter, r *http.Request, req rpcRequest) {
 	// Validate the requested protocol version is supported.
 	requested := metaProtocolVersion(req)
-	if _, ok := chooseProtocol(requested, s.cfg.SupportedProtocols); !ok {
+	if _, ok := chooseProtocol(requested, config.SupportedProtocols()); !ok {
 		s.writeUnsupportedProtocolVersion(w, req.ID, requested)
 		return
 	}
@@ -178,7 +180,7 @@ func (s *Server) handleModernDispatch(w http.ResponseWriter, r *http.Request, re
 func (s *Server) handleServerDiscover(w http.ResponseWriter, r *http.Request, req rpcRequest) {
 	result := map[string]any{
 		"resultType":        "complete",
-		"supportedVersions": s.cfg.SupportedProtocols,
+		"supportedVersions": config.SupportedProtocols(),
 		"capabilities": map[string]any{
 			"tools": map[string]any{
 				"listChanged": false,
@@ -195,7 +197,7 @@ func (s *Server) handleServerDiscover(w http.ResponseWriter, r *http.Request, re
 		"_meta": map[string]any{
 			metaKeyServerInfo: map[string]any{
 				"name":    s.cfg.ServerName,
-				"version": s.cfg.ServerVersion,
+				"version": version.Version,
 			},
 		},
 	}

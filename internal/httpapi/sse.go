@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/v2up-32mb/mcp-tools/internal/config"
 )
 
 const (
@@ -286,10 +288,10 @@ func (s *Server) handleSingleShotSSE(w http.ResponseWriter, r *http.Request, req
 			_ = sw.writeRPCError(req.ID, -32602, err.Error(), nil)
 			return
 		}
-		protocol, ok := chooseProtocol(requested, s.cfg.SupportedProtocols)
+		protocol, ok := chooseProtocol(requested, config.SupportedProtocols())
 		if !ok {
-			s.debugLogRejected(r, &req, http.StatusOK, -32002, "unsupported protocol version", map[string]any{"supported_protocols": s.cfg.SupportedProtocols, "transport": "single_shot_sse"})
-			_ = sw.writeRPCError(req.ID, -32002, "unsupported protocol version", map[string]any{"supported": s.cfg.SupportedProtocols})
+			s.debugLogRejected(r, &req, http.StatusOK, -32002, "unsupported protocol version", map[string]any{"supported_protocols": config.SupportedProtocols(), "transport": "single_shot_sse"})
+			_ = sw.writeRPCError(req.ID, -32002, "unsupported protocol version", map[string]any{"supported": config.SupportedProtocols()})
 			return
 		}
 		clientInfo, err := optionalObjectParamWithName(req.Params, "clientInfo", "clientInfo")
